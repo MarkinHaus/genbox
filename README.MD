@@ -22,7 +22,7 @@ genbox ui
 ## Installation
 
 ```bash
-git clone https://github.com/you/genbox
+git clone https://github.com/MarkinHaus/genbox
 cd genbox
 pip install -e .                    # core only
 pip install -e ".[image]"           # + image generation
