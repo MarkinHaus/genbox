@@ -128,30 +128,41 @@ def build_ltx_call_kwargs(
     image_cond_noise_scale: float,
     generator,
     image=None,
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     """
     Build pipeline __call__ kwargs for LTX T2V or I2V.
 
-    All LTX variants (classic, distilled, ltx2) share the same core kwargs.
-    decode_timestep / image_cond_noise_scale apply from 0.9.1+.
+    callback_on_step_end: diffusers callback, fn(pipe, step, ts, cb_kwargs) → dict.
+    callback_tensor_inputs: defaults to ["latents"] when callback is set.
+    Note: LTX latents in the callback are packed (B, seq_len, channels).
+    std() for the noise meter works on any shape — no unpack needed.
     """
     kwargs: dict = dict(
-        prompt               = prompt,
-        negative_prompt      = negative_prompt,
-        width                = width,
-        height               = height,
-        num_frames           = frames,
-        frame_rate           = fps,
-        num_inference_steps  = steps,
-        guidance_scale       = guidance_scale,
-        decode_timestep      = decode_timestep,
+        prompt                 = prompt,
+        negative_prompt        = negative_prompt,
+        width                  = width,
+        height                 = height,
+        num_frames             = frames,
+        frame_rate             = fps,
+        num_inference_steps    = steps,
+        guidance_scale         = guidance_scale,
+        decode_timestep        = decode_timestep,
         image_cond_noise_scale = image_cond_noise_scale,
-        generator            = generator,
+        generator              = generator,
     )
 
     if mode == "i2v" and image is not None:
         kwargs["image"] = image
+
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
 
     if extra:
         kwargs.update(extra)
@@ -285,18 +296,14 @@ def generate(
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
     enable_vae_tiling: bool = True,
+    tracker=None,             # Optional[GenProgressTracker] — Variante 1 + 3
+    enable_noise_meter: bool = False,  # Variante 3
 ) -> dict:
     """
     Run LTX video generation (T2V or I2V, any variant).
 
-    Args:
-        cfg:               LtxPipelineConfig
-        entry:             ModelEntry from REGISTRY
-        models_dir:        root models directory
-        loras_dir:         root LoRA directory
-        outputs_dir:       root outputs directory
-        vram_gb:           available VRAM (for offload strategy)
-        enable_vae_tiling: enable VAE tiling (default True — LTX VAE benefits from it)
+    tracker: GenProgressTracker — live step/stage/noise updates when provided.
+    enable_noise_meter: append latent std() per step to tracker.noise_std_history.
 
     Returns:
         dict with keys: output_path, metadata, elapsed_s
@@ -309,7 +316,6 @@ def generate(
     dtype   = resolve_dtype(entry.quant)
     variant = cfg.variant
 
-    # Auto-detect variant from entry if not explicitly set
     if variant == "classic":
         variant = detect_ltx_variant(
             getattr(entry, "hf_pipeline_repo", ""),
@@ -324,9 +330,11 @@ def generate(
         f"seed={seed} frames={frames} {cfg.width}x{cfg.height} device={device}"
     )
 
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
     pipe = load_ltx_pipe(entry, models_dir, dtype, variant=variant, mode=cfg.mode)
 
-    # LoRAs
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture="ltx")
 
@@ -335,9 +343,15 @@ def generate(
         accel=cfg.accel, enable_vae_tiling=enable_vae_tiling,
     )
 
+    step_callback = None
+    if tracker is not None:
+        from genbox.utils.utils_video_pipeline import make_video_step_callback
+        step_callback = make_video_step_callback(
+            tracker, enable_noise_meter=enable_noise_meter
+        )
+
     gen = make_generator(seed, device)
 
-    # Load conditioning image for I2V
     image = None
     if cfg.mode == "i2v" and cfg.image is not None:
         from diffusers.utils import load_image  # type: ignore
@@ -351,13 +365,24 @@ def generate(
         decode_timestep=cfg.decode_timestep,
         image_cond_noise_scale=cfg.image_cond_noise_scale,
         generator=gen, image=image,
+        callback_on_step_end=step_callback,
     )
 
+    if tracker is not None:
+        tracker.set_stage("denoising")
+
     result       = pipe(**kwargs)
-    video_frames = getattr(result, "frames", None) or getattr(result, "videos", None)
+    frames = getattr(result, "frames", None)
+    if frames is not None:
+        video_frames = frames
+    else:
+        video_frames = getattr(result, "videos", None)
     if video_frames is None:
         raise RuntimeError("LTX pipeline returned no frames — check diffusers version")
     video_frames = video_frames[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_video_output_path(
@@ -378,7 +403,6 @@ def generate(
 
     log.info(f"LTX {cfg.mode.upper()} done → {out_path.name} ({elapsed:.1f}s)")
     return {"output_path": out_path, "metadata": meta, "elapsed_s": elapsed}
-
 
 # Convenience aliases
 def text_to_video(cfg: LtxPipelineConfig, entry, models_dir, **kw):

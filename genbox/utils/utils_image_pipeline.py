@@ -24,7 +24,7 @@ import random
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, Callable
 
 log = logging.getLogger("genbox.utils_image_pipeline")
 
@@ -413,6 +413,8 @@ def build_call_kwargs(
     guidance_scale: float,
     generator,
     t5_mode: str = "fp16",
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     """
@@ -422,6 +424,15 @@ def build_call_kwargs(
       flux:  no negative_prompt; width/height snapped to 16; t5_mode=none → max_sequence_length=77
       sd35:  no negative_prompt (handled by arch internally)
       sd15/sdxl/pony: negative_prompt included
+
+    callback_on_step_end:
+      diffusers callback_on_step_end function.
+      Signature: fn(pipe, step_index, timestep, callback_kwargs) → dict
+      Only injected when not None.
+    callback_tensor_inputs:
+      List of tensor names to expose in callback_kwargs.
+      Defaults to ["latents"] when callback is set.
+      Must be a subset of pipe._callback_tensor_inputs.
     """
     # Snap resolution for transformer-based models
     if architecture in ("flux", "sd35"):
@@ -443,8 +454,16 @@ def build_call_kwargs(
 
     # T5 mode
     if architecture == "flux" and t5_mode == "none":
-        kwargs["prompt_2"]          = None
+        kwargs["prompt_2"]            = None
         kwargs["max_sequence_length"] = 77
+
+    # Live-progress callback
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
 
     if extra:
         kwargs.update(extra)
@@ -452,6 +471,133 @@ def build_call_kwargs(
     return kwargs
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# F2. FLUX-specific step callback (packed-latent aware)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def make_flux_step_callback(
+    tracker,                        # GenProgressTracker
+    height: int,
+    width: int,
+    preview_interval: int = 5,
+    preview_dir: Optional[Path] = None,
+    enable_preview: bool = True,
+) -> Callable:
+    """
+    Build a diffusers callback_on_step_end for FLUX / FLUX.2 pipelines.
+
+    Key difference vs the generic make_step_callback in gen_progress.py:
+      FLUX keeps latents in *packed* form during denoising:
+        shape (batch, seq_len, channels)  — NOT (batch, C, H, W)
+      Before calling the VAE decoder, they must be unpacked via
+        pipe._unpack_latents(latents, height, width, vae_scale_factor).
+      This function handles that transparently.
+
+    Usage (in text_to_image):
+        cb = make_flux_step_callback(tracker, cfg.height, cfg.width,
+                                     preview_interval=cfg.preview_interval,
+                                     enable_preview=cfg.enable_preview)
+        kwargs = build_call_kwargs(..., callback_on_step_end=cb)
+        pipe(**kwargs)
+
+    Returns a callback with diffusers signature:
+        fn(pipe, step_index: int, timestep: int, callback_kwargs: dict) → dict
+    """
+    import tempfile as _tmpmod
+    _preview_dir = preview_dir or Path(_tmpmod.mkdtemp(prefix="genbox_preview_"))
+
+    def _unpack_latents(latents, pipe) -> "torch.Tensor":  # type: ignore[name-defined]
+        """
+        Unpack FLUX packed latents to (B, C, H, W) for VAE decode.
+        FLUX packs latents as (B, seq, C) inside the denoising loop.
+        Uses pipe._unpack_latents — a staticmethod present on all FLUX pipeline variants.
+        Falls back silently if unavailable (e.g. future API change).
+        """
+        if latents.ndim == 3 and hasattr(pipe, "_unpack_latents"):
+            try:
+                return pipe._unpack_latents(
+                    latents,
+                    height,
+                    width,
+                    getattr(pipe, "vae_scale_factor", 8),
+                )
+            except Exception:
+                pass
+        return latents
+
+    def _callback(pipe, step_index: int, timestep, callback_kwargs: dict) -> dict:
+        try:
+            tracker.set_step(step_index, stage="denoising")
+
+            if (
+                enable_preview
+                and preview_interval > 0
+                and step_index > 0
+                and step_index % preview_interval == 0
+            ):
+                latents = callback_kwargs.get("latents")
+                if latents is not None:
+                    from genbox.utils.gen_progress import decode_latents_to_preview
+                    unpacked = _unpack_latents(latents, pipe)
+                    path = decode_latents_to_preview(
+                        unpacked, pipe, _preview_dir, step_index
+                    )
+                    if path is not None:
+                        tracker.set_preview(path)
+        except Exception:
+            pass  # never kill generation over a progress update
+
+        return {}
+
+    return _callback
+
+# ──────────────────────────────────────────────────────────────────────────────
+# F3. SDL-specific step callback (standard spatial latents)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def make_sdl_step_callback(
+    tracker,                        # GenProgressTracker
+    preview_interval: int = 5,
+    preview_dir: Optional[Path] = None,
+    enable_preview: bool = True,
+) -> Callable:
+    """
+    Build a diffusers callback_on_step_end for SDL pipelines
+    (SD1.5, SDXL, SD3.5, Pony).
+
+    SDL latents are already in (B, C, H, W) spatial form — no unpacking needed.
+    decode_latents_to_preview is called directly.
+
+    Returns a callback with diffusers signature:
+        fn(pipe, step_index: int, timestep: int, callback_kwargs: dict) → dict
+    """
+    import tempfile as _tmpmod
+    _preview_dir = preview_dir or Path(_tmpmod.mkdtemp(prefix="genbox_preview_"))
+
+    def _callback(pipe, step_index: int, timestep, callback_kwargs: dict) -> dict:
+        try:
+            tracker.set_step(step_index, stage="denoising")
+
+            if (
+                enable_preview
+                and preview_interval > 0
+                and step_index > 0
+                and step_index % preview_interval == 0
+            ):
+                latents = callback_kwargs.get("latents")
+                if latents is not None:
+                    from genbox.utils.gen_progress import decode_latents_to_preview
+                    path = decode_latents_to_preview(
+                        latents, pipe, _preview_dir, step_index
+                    )
+                    if path is not None:
+                        tracker.set_preview(path)
+        except Exception:
+            pass  # never kill generation
+
+        return {}
+
+    return _callback
 # ──────────────────────────────────────────────────────────────────────────────
 # G. Output path + metadata
 # ──────────────────────────────────────────────────────────────────────────────

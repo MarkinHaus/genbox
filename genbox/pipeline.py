@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -190,6 +191,9 @@ def text_to_image(
     t5_mode: str = "fp16",
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
+    tracker=None,  # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> GenResult:
     """
     Text → Image. Routes to pipeline_flux, pipeline_sdl, or pipeline_pony
@@ -211,8 +215,10 @@ def text_to_image(
             loras=loras, accel=accel, output=output,
         )
         return _wrap(_gen(cfg_obj, entry, _models_dir(),
+                        tracker=tracker,
                          loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                         vram_gb=_vram_gb()))
+                         vram_gb=_vram_gb()),
+                     )
 
     if arch in ("sd15", "sdxl", "sd35"):
         if _is_pony(entry):
@@ -262,13 +268,19 @@ def image_to_image(
     t5_mode: str = "fp16",
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> GenResult:
-    """Image → Image (img2img). Supports FLUX, SD1.5, SDXL, SD3.5."""
+    """Image → Image (img2img). Supports FLUX, SD1.5, SDXL, SD3.5.
+
+    tracker: GenProgressTracker — injected by run_with_progress for live UI.
+    """
     model_id, entry = _resolve_model(model, "image")
     require_installed(model_id)
     accel = accel if accel is not None else _default_accels()
 
-    from genbox.piplen_video.pipeline_img2img import Img2ImgConfig, image_to_image as _gen
+    from genbox.pipline_image.pipeline_img2img import Img2ImgConfig, image_to_image as _gen
     cfg_obj = Img2ImgConfig(
         model_id=model_id, architecture=entry.architecture,
         prompt=prompt, negative_prompt=negative_prompt,
@@ -280,7 +292,10 @@ def image_to_image(
     )
     return _wrap(_gen(cfg_obj, entry, _models_dir(),
                       loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                      vram_gb=_vram_gb()))
+                      vram_gb=_vram_gb(),
+                      tracker=tracker,
+                      enable_preview=enable_preview,
+                      preview_interval=preview_interval))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -307,12 +322,17 @@ def inpaint(
     t5_mode: str = "fp16",
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> GenResult:
     """
     Inpainting — fill masked region guided by prompt.
     mask_mode: "white_inpaint" (white=fill) | "black_inpaint" (black=fill)
     blur_radius: soften mask edges (Gaussian blur radius in pixels)
     dilate_pixels: expand mask region outward
+
+    tracker: GenProgressTracker — injected by run_with_progress for live UI.
     """
     model_id, entry = _resolve_model(model, "image")
     require_installed(model_id)
@@ -332,13 +352,15 @@ def inpaint(
     )
     return _wrap(_gen(cfg_obj, entry, _models_dir(),
                       loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                      vram_gb=_vram_gb()))
+                      vram_gb=_vram_gb(),
+                      tracker=tracker,
+                      enable_preview=enable_preview,
+                      preview_interval=preview_interval))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # OUTPAINT
 # ══════════════════════════════════════════════════════════════════════════════
-
 def outpaint(
     prompt: str,
     input_image: Union[str, Path],
@@ -358,11 +380,16 @@ def outpaint(
     t5_mode: str = "fp16",
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> GenResult:
     """
     Outpainting — extend image beyond its borders.
     Specify expansion amounts in pixels: left, right, top, bottom.
     feather_radius: smooth seam blending (Gaussian radius).
+
+    tracker: GenProgressTracker — injected by run_with_progress for live UI.
     """
     model_id, entry = _resolve_model(model, "image")
     require_installed(model_id)
@@ -381,8 +408,10 @@ def outpaint(
     )
     return _wrap(_gen(cfg_obj, entry, _models_dir(),
                       loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                      vram_gb=_vram_gb()))
-
+                      vram_gb=_vram_gb(),
+                      tracker=tracker,
+                      enable_preview=enable_preview,
+                      preview_interval=preview_interval))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TEXT → VIDEO
@@ -404,9 +433,14 @@ def text_to_video(
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
     enable_vae_tiling: bool = False,
+    tracker=None,             # Optional[GenProgressTracker]
+    enable_noise_meter: bool = False,
 ) -> GenResult:
     """
     Text → Video. Routes to pipeline_wan or pipeline_ltx.
+
+    tracker: GenProgressTracker — injected by run_with_progress for live UI.
+    enable_noise_meter: stream latent std() history via tracker (Variante 3).
     """
     model_id, entry = _resolve_model(model, "video")
     require_installed(model_id)
@@ -426,7 +460,8 @@ def text_to_video(
         )
         return _wrap(_gen(cfg_obj, entry, _models_dir(),
                           loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                          vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling))
+                          vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling,
+                          tracker=tracker, enable_noise_meter=enable_noise_meter))
 
     if arch == "ltx":
         from genbox.piplen_video.pipeline_ltx import LtxPipelineConfig, generate as _gen
@@ -443,7 +478,8 @@ def text_to_video(
         )
         return _wrap(_gen(cfg_obj, entry, _models_dir(),
                           loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                          vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling))
+                          vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling,
+                          tracker=tracker, enable_noise_meter=enable_noise_meter))
 
     raise ValueError(
         f"text_to_video: unsupported architecture {arch!r} for {model_id!r}. "
@@ -473,10 +509,15 @@ def image_to_video(
     sampler: str = "default",
     output: Optional[Union[str, Path]] = None,
     enable_vae_tiling: bool = False,
+    tracker=None,             # Optional[GenProgressTracker]
+    enable_noise_meter: bool = False,
 ) -> GenResult:
     """
     Image → Video. Routes to pipeline_img2video (dispatches to wan / ltx).
     end_frame is supported for LTX-2 FLF (first-last-frame) mode.
+
+    tracker: GenProgressTracker — injected by run_with_progress for live UI.
+    enable_noise_meter: stream latent std() history via tracker (Variante 3).
     """
     model_id, entry = _resolve_model(model, "video")
     require_installed(model_id)
@@ -496,7 +537,8 @@ def image_to_video(
     )
     return _wrap(_gen(cfg_obj, entry, _models_dir(),
                       loras_dir=_loras_dir(), outputs_dir=_outputs_dir(),
-                      vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling))
+                      vram_gb=_vram_gb(), enable_vae_tiling=enable_vae_tiling,
+                      tracker=tracker, enable_noise_meter=enable_noise_meter))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

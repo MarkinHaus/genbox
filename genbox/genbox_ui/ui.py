@@ -39,7 +39,7 @@ from genbox.utils.gen_progress import (
     GenProgressTracker, GenRunner, make_step_callback,
     decode_latents_to_preview, format_step_label,
 )
-from genbox.genbox_ui.ui_gen_progress import make_logcat
+from genbox.genbox_ui.ui_gen_progress import make_logcat, render_progress
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
@@ -445,7 +445,7 @@ def screen_generate():
             w = st.select_slider("Width",  [512,640,768,896,1024,1152,1280,1408,1536], 1024, key="width")
             h = st.select_slider("Height", [512,640,768,896,1024,1152,1280,1408,1536], 1024, key="height")
         else:
-            w = st.select_slider("Width",  [512,640,768,960,1024,1280], 832, key="vid_w")
+            w = st.select_slider("Width",  [512,640,768,832,960,1024,1280], 832, key="vid_w")
             h = st.select_slider("Height", [320,480,512,576,704,720],   480, key="vid_h")
             n_frames = st.slider("Frames", 5, 201, 81, step=4, key="frames",
                                  help="WAN: 4n+1 (e.g. 81)  ·  LTX: 8n+1 (e.g. 97)")
@@ -542,15 +542,23 @@ def screen_generate():
         # ── Progress area ──────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown('<div class="section-label">Progress</div>', unsafe_allow_html=True)
-        ph_bar     = st.empty()
-        ph_stage   = st.empty()
+        ph_bar = st.empty()
 
-        # Two columns: stage info | live preview
-        pc_left, pc_right = st.columns([2, 1], gap="medium")
-        with pc_left:
-            ph_label = st.empty()
-        with pc_right:
-            ph_preview = st.empty() if show_preview else st.empty()
+        # Step counter + ETA in einer Zeile
+        sc_left, sc_mid, sc_right = st.columns([2, 3, 2], gap="small")
+        with sc_left:
+            ph_step = st.empty()  # "12 / 28"
+        with sc_mid:
+            ph_label = st.empty()  # "denoising · ETA 14s"
+        with sc_right:
+            ph_stage = st.empty()  # "elapsed: 8.3s"
+
+        # Preview (Bild) | Noise-Meter (Video)
+        pv_left, pv_right = st.columns([2, 1], gap="medium")
+        with pv_left:
+            ph_preview = st.empty()
+        with pv_right:
+            ph_noise = st.empty()  # Variante 3 — nur bei Video sichtbar
 
         try:
             from genbox import pipeline
@@ -595,38 +603,36 @@ def screen_generate():
                 )
 
             # ── Generation function (runs in thread) ─────────────────────────
-            def gen_fn(t: GenProgressTracker):
-                t.set_stage("loading model")
-                cb = _make_cb(t)
+            # ── Build tracker ────────────────────────────────────────────────
+            tracker = GenProgressTracker(total_steps=steps)
+            preview_tmp = tmp_dir / "previews"
 
+            # ── Generation function (runs in thread) ─────────────────────────
+            def gen_fn(t: GenProgressTracker):
                 kwargs = dict(
                     prompt=prompt, model=selected_model,
                     steps=steps, guidance_scale=guidance,
                     seed=int(seed), loras=lora_paths,
                     accel=accel, sampler=selected_sampler,
                     output=custom_out.strip() or None,
+                    tracker=t,
+                    enable_preview=show_preview,
+                    preview_interval=preview_interval if show_preview else 0,
                 )
 
                 if pipe_type in ("Text → Image", "Image → Image"):
                     kwargs["t5_mode"] = t5_mode
 
-                # Inject callback only for image pipelines that support it
-                # (video pipelines have different callback signatures)
-                supports_cb = not is_video
-                if supports_cb:
-                    kwargs["extra_callback"] = cb  # pipeline.py picks this up if present
-
-                t.set_stage("denoising")
-
                 if pipe_type == "Text → Image":
                     kwargs.update(width=w, height=h, negative_prompt=neg_prompt)
-                    return pipeline.text_to_image(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    return pipeline.text_to_image(**kwargs)
 
                 elif pipe_type == "Image → Image":
                     if not input_path:
                         raise ValueError("Input image required for Image → Image")
-                    kwargs.update(input_image=input_path, strength=strength, width=w, height=h)
-                    return pipeline.image_to_image(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    kwargs.update(input_image=input_path, strength=strength,
+                                  width=w, height=h)
+                    return pipeline.image_to_image(**kwargs)
 
                 elif pipe_type == "Inpaint":
                     if not input_path:
@@ -639,7 +645,7 @@ def screen_generate():
                         blur_radius=blur_r, dilate_pixels=dilate,
                         mask_mode=mask_mode,
                     )
-                    return pipeline.inpaint(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    return pipeline.inpaint(**kwargs)
 
                 elif pipe_type == "Outpaint":
                     if not input_path:
@@ -650,24 +656,26 @@ def screen_generate():
                         top=int(expand_top), bottom=int(expand_bottom),
                         feather_radius=float(feather), strength=strength,
                     )
-                    return pipeline.outpaint(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    return pipeline.outpaint(**kwargs)
 
                 elif pipe_type == "Text → Video":
                     kwargs.update(
-                        width=w, height=h, frames=n_frames, fps=vid_fps,
-                        negative_prompt=neg_prompt,
+                        width=w, height=h, frames=n_frames,
+                        fps=vid_fps, negative_prompt=neg_prompt,
+                        enable_noise_meter=True,
                     )
-                    return pipeline.text_to_video(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    return pipeline.text_to_video(**kwargs)
 
                 elif pipe_type == "Image → Video":
                     if not input_path:
                         raise ValueError("Start frame required for Image → Video")
                     kwargs.update(
                         start_frame=input_path, end_frame=end_path,
-                        width=w, height=h, frames=n_frames, fps=vid_fps,
-                        negative_prompt=neg_prompt,
+                        width=w, height=h, frames=n_frames,
+                        fps=vid_fps, negative_prompt=neg_prompt,
+                        enable_noise_meter=True,
                     )
-                    return pipeline.image_to_video(**{k: v for k, v in kwargs.items() if k != "extra_callback"})
+                    return pipeline.image_to_video(**kwargs)
 
                 raise ValueError(f"Unknown pipeline type: {pipe_type}")
 
@@ -676,28 +684,96 @@ def screen_generate():
             runner = GenRunner(fn=gen_fn, tracker=tracker)
             runner.start()
 
-            poll_interval = 0.4  # seconds
+            def _render_step(snap, frac, eta):
+                """Render step counter, progress bar, label, elapsed."""
+                step = snap["step"]
+                total = snap["total"]
+                stage = snap["stage"]
+                done = snap["done"]
+                err = snap["error"]
+
+                ph_bar.progress(min(frac, 1.0))
+
+                # Step counter — large, accent color
+                bar_color = "#2dd4a0" if done else "#ff4a4a" if err else "#4a9eff"
+                ph_step.markdown(
+                    f'<span style="font-size:20px;font-weight:500;'
+                    f'color:{bar_color};letter-spacing:0.04em;">'
+                    f'{step}&thinsp;/&thinsp;{total}</span>',
+                    unsafe_allow_html=True,
+                )
+
+                # ETA label
+                eta_str = (
+                    f"{int(eta) // 60}m {int(eta) % 60}s" if eta and eta >= 60
+                    else f"{int(eta)}s" if eta else "…"
+                )
+                ph_label.markdown(
+                    f'<span style="font-size:11px;color:#6b6b6b;">'
+                    f'{stage}&nbsp;&nbsp;·&nbsp;&nbsp;ETA {eta_str}</span>',
+                    unsafe_allow_html=True,
+                )
+
+                # Elapsed
+                ph_stage.markdown(
+                    f'<span style="font-size:10px;color:#4a4a4a;">'
+                    f'elapsed: {tracker.elapsed_seconds():.1f}s</span>',
+                    unsafe_allow_html=True,
+                )
+
+            def _render_noise(snap):
+                """
+                Render latent std sparkline (Variante 3 — video only).
+                Pure SVG, no external lib. Normalized polyline, descending curve.
+                """
+                history = snap.get("noise_std_history", [])
+                if len(history) < 2:
+                    return
+
+                w_px, h_px = 160, 48
+                pad = 4
+                min_v = min(history)
+                max_v = max(history)
+                rng = max(max_v - min_v, 1e-6)
+
+                n = len(history)
+                pts = []
+                for i, v in enumerate(history):
+                    x = pad + (w_px - 2 * pad) * i / max(n - 1, 1)
+                    y = h_px - pad - (h_px - 2 * pad) * (v - min_v) / rng
+                    pts.append(f"{x:.1f},{y:.1f}")
+
+                polyline = " ".join(pts)
+                last_std = history[-1]
+
+                svg = (
+                    f'<svg viewBox="0 0 {w_px} {h_px}" '
+                    f'xmlns="http://www.w3.org/2000/svg" '
+                    f'style="width:100%;max-width:{w_px}px;display:block;">'
+                    f'<rect width="{w_px}" height="{h_px}" fill="#0a0a0a" rx="2"/>'
+                    f'<polyline points="{polyline}" '
+                    f'fill="none" stroke="#4a9eff" stroke-width="1.5" '
+                    f'stroke-linejoin="round" stroke-linecap="round"/>'
+                    f'<text x="{w_px - pad}" y="{h_px - pad}" '
+                    f'text-anchor="end" fill="#6b6b6b" '
+                    f'font-size="8" font-family="JetBrains Mono,monospace">'
+                    f'σ {last_std:.3f}</text>'
+                    f'</svg>'
+                )
+                ph_noise.markdown(
+                    f'<div style="margin-top:4px;">'
+                    f'<span style="font-size:9px;color:#3a3a3a;'
+                    f'letter-spacing:0.1em;text-transform:uppercase;">'
+                    f'noise σ</span>'
+                    f'{svg}</div>',
+                    unsafe_allow_html=True,
+                )
+
             while runner.is_alive():
                 snap = tracker.snapshot()
                 frac = tracker.fraction()
-                eta  = tracker.eta_seconds()
-                label = format_step_label(snap["step"], snap["total"], snap["stage"], eta)
-
-                ph_bar.progress(frac)
-                color = "#4a9eff"
-                ph_label.markdown(
-                    f'<span class="progress-stage" style="color:{color};">'
-                    f'{label}</span>',
-                    unsafe_allow_html=True,
-                )
-                # Show stage detail
-                ph_stage.markdown(
-                    f'<span style="font-size:10px;color:#4a4a4a;">'
-                    f'elapsed: {tracker.elapsed_seconds():.1f}s'
-                    f'</span>',
-                    unsafe_allow_html=True,
-                )
-                # Live preview
+                eta = tracker.eta_seconds()
+                _render_step(snap, frac, eta)
                 if show_preview and snap["preview_path"]:
                     p = Path(snap["preview_path"])
                     if p.exists():
@@ -709,10 +785,24 @@ def screen_generate():
                             )
                         except Exception:
                             pass
-
-                __import__("time").sleep(poll_interval)
+                if is_video:
+                    _render_noise(snap)
+                __import__("time").sleep(0.4)
 
             runner.join()
+
+            # Final render
+            snap = tracker.snapshot()
+            frac = tracker.fraction()
+            _render_step(snap, frac, None)
+            if is_video:
+                _render_noise(snap)
+            render_progress(tracker, ph_bar, ph_label, ph_preview, show_preview)
+
+            if runner.exception:
+                raise runner.exception
+
+            result: GenResult = runner.result
 
             # Final progress update
             snap  = tracker.snapshot()

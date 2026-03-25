@@ -33,7 +33,7 @@ from genbox.utils.utils_image_pipeline import (
     resolve_dtype,
     resolve_offload_mode,
     resolve_seed,
-    set_scheduler,
+    set_scheduler, make_sdl_step_callback,
 )
 
 log = logging.getLogger("genbox.pipeline_sdl")
@@ -138,6 +138,8 @@ def build_sdl_call_kwargs(
     steps: int,
     guidance_scale: float,
     generator,
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     """
@@ -145,6 +147,8 @@ def build_sdl_call_kwargs(
 
     SD3.5 does not accept explicit negative_prompt (handled internally).
     SD1.5 / SDXL include negative_prompt when non-empty.
+    callback_on_step_end: diffusers callback, fn(pipe, step, ts, cb_kwargs) → dict.
+    callback_tensor_inputs: defaults to ["latents"] when callback is set.
     """
     kwargs: dict[str, Any] = dict(
         prompt              = prompt,
@@ -155,9 +159,15 @@ def build_sdl_call_kwargs(
         generator           = generator,
     )
 
-    # SD3.5 handles negative_prompt internally — do not pass it
     if architecture != "sd35" and negative_prompt:
         kwargs["negative_prompt"] = negative_prompt
+
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
 
     if extra:
         kwargs.update(extra)
@@ -268,9 +278,15 @@ def text_to_image(
     loras_dir: Optional[Union[str, Path]] = None,
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ):
     """
     Run SDL (SD1.5 / SDXL / SD3.5) text-to-image generation.
+
+    tracker: GenProgressTracker — when provided, live stage/step/preview
+             updates flow to the UI. Pass None for headless / CLI runs.
 
     Returns:
         dict with keys: output_path, metadata, elapsed_s
@@ -287,17 +303,26 @@ def text_to_image(
         f"seed={seed} steps={cfg.steps} device={device}"
     )
 
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
     pipe = load_sdl_pipe(entry, models_dir, dtype)
     set_scheduler(pipe, cfg.architecture, cfg.sampler)
 
-    # LoRAs
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture=cfg.architecture)
 
-    # Accelerators
     apply_pipeline_accelerators(
         pipe, device=device, vram_gb=vram_gb, accel=cfg.accel,
     )
+
+    step_callback = None
+    if tracker is not None:
+        step_callback = make_sdl_step_callback(
+            tracker=tracker,
+            preview_interval=preview_interval,
+            enable_preview=enable_preview,
+        )
 
     gen    = make_generator(seed, device)
     kwargs = build_sdl_call_kwargs(
@@ -306,10 +331,17 @@ def text_to_image(
         width=cfg.width, height=cfg.height,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen,
+        callback_on_step_end=step_callback,
     )
+
+    if tracker is not None:
+        tracker.set_stage("denoising")
 
     result   = pipe(**kwargs)
     image    = result.images[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_output_path(

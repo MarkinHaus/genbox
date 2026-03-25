@@ -357,55 +357,143 @@ Sidecar `.json` written by `genbox loras tag` or `pipeline.write_lora_metadata()
 `gen_progress.py` — thread-safe, no Streamlit dependency:
 
 ```python
-from genbox.gen_progress import (
-    GenProgressTracker,    # state container
-    make_step_callback,    # diffusers callback_on_step_end factory
+from genbox.utils.gen_progress import (
+    GenProgressTracker,         # state container
+    make_step_callback,         # generic diffusers callback factory
     decode_latents_to_preview,  # VAE decode → PNG, returns None on failure
-    GenRunner,             # threading.Thread subclass
-    format_step_label,     # → "denoising 5 / 28 · ETA 12s"
+    GenRunner,                  # threading.Thread subclass
+    format_step_label,          # → "denoising 5 / 28 · ETA 12s"
 )
-
-tracker = GenProgressTracker(total_steps=28)
-
-# diffusers callback
-cb = make_step_callback(
-    tracker,
-    preview_interval=5,    # decode latents every N steps
-    decode_fn=None,        # optional: lambda latents, pipe → Path or None
-    preview_dir=None,      # directory for preview PNGs
-)
-# pass cb as callback_on_step_end= to your diffusers pipeline call
-
-# background thread
-def my_gen(t: GenProgressTracker):
-    # … call pipeline, pass cb as callback …
-    return {"output_path": …, "metadata": {}, "elapsed_s": …}
-
-runner = GenRunner(fn=my_gen, tracker=tracker)
-runner.start()
-while runner.is_alive():
-    snap = tracker.snapshot()    # {"step", "total", "stage", "done", "error", "preview_path", …}
-    print(format_step_label(snap["step"], snap["total"], snap["stage"], tracker.eta_seconds()))
-    time.sleep(0.4)
-runner.join()
-# runner.result     → dict or None
-# runner.exception  → Exception or None
 ```
 
-`GenProgressTracker` public methods:
+### Tracker creation
+
+```python
+tracker = GenProgressTracker(total_steps=28)
+```
+
+### Passing tracker to a pipeline
+
+All generation functions accept `tracker=` directly:
+
+```python
+from genbox import pipeline
+
+result = pipeline.text_to_image(
+    prompt="...", model="flux1_dev",
+    tracker=tracker,
+    enable_preview=True,
+    preview_interval=5,
+)
+
+result = pipeline.text_to_video(
+    prompt="...", model="wan_1_3b",
+    tracker=tracker,
+    enable_noise_meter=True,   # video only — Variante 3
+)
+```
+
+For **image pipelines** (`text_to_image`, `image_to_image`, `inpaint`, `outpaint`) the tracker receives step updates and optional latent preview images decoded via the VAE.
+
+For **video pipelines** (`text_to_video`, `image_to_video`) the tracker receives step updates and optionally per-step latent noise statistics (`noise_std_history`) — no VAE decode is performed.
+
+### Architecture-aware callbacks (used internally)
+
+The correct callback is selected automatically inside each pipeline based on architecture. For custom use:
+
+```python
+from genbox.utils.utils_image_pipeline import (
+    make_flux_step_callback,  # FLUX / FLUX.2 — handles packed latents (B, seq, C)
+    make_sdl_step_callback,   # SD1.5 / SDXL / SD3.5 / Pony — spatial latents (B, C, H, W)
+)
+from genbox.utils.utils_video_pipeline import (
+    make_video_step_callback, # WAN + LTX — Variante 1 + optional Variante 3
+)
+
+# FLUX example
+cb = make_flux_step_callback(
+    tracker,
+    height=1024, width=1024,
+    preview_interval=5,
+    enable_preview=True,
+)
+
+# SDL example
+cb = make_sdl_step_callback(
+    tracker,
+    preview_interval=5,
+    enable_preview=True,
+)
+
+# Video example (step counter + noise meter, no VAE decode)
+cb = make_video_step_callback(
+    tracker,
+    enable_noise_meter=True,
+)
+
+# pass cb as:
+pipe(
+    ...,
+    callback_on_step_end=cb,
+    callback_on_step_end_tensor_inputs=["latents"],
+)
+```
+
+> **Note on `make_step_callback`:** The generic factory in `gen_progress.py` is kept for custom use. Its `decode_fn` must accept `(latents, pipe, step_index: int) → Optional[Path]`. For FLUX and LTX the latents in the callback are in packed form `(B, seq_len, channels)` — use the arch-specific factories above instead.
+
+### Streamlit UI integration
+
+```python
+from genbox.genbox_ui.ui_gen_progress import run_with_progress, render_progress
+
+# one-liner: launches thread, polls, renders bar + label + preview
+result_dict = run_with_progress(
+    fn=lambda tracker: pipeline.text_to_image(
+        prompt="...", model="flux1_dev",
+        tracker=tracker,
+        enable_preview=True,
+        preview_interval=5,
+    ),
+    total_steps=28,
+    show_preview=True,
+    poll_interval_s=0.4,
+)
+
+# or manual polling loop
+runner = GenRunner(fn=gen_fn, tracker=tracker)
+runner.start()
+while runner.is_alive():
+    render_progress(tracker, ph_bar, ph_label, ph_preview)
+    time.sleep(0.4)
+runner.join()
+if runner.exception:
+    raise runner.exception
+result = runner.result
+```
+
+### `GenProgressTracker` public API
 
 | Method | Description |
 |---|---|
-| `snapshot() → dict` | thread-safe state copy |
-| `fraction() → float` | 0.0–1.0 |
-| `elapsed_seconds() → float` | wall time since creation |
-| `eta_seconds() → float or None` | linear estimate from step times |
-| `set_step(step, stage="denoising")` | |
-| `set_stage(stage)` | |
-| `set_preview(path)` | |
-| `mark_done()` | sets step=total, stage="done", done=True |
-| `mark_error(msg)` | sets error=True, error_msg |
+| `snapshot() → dict` | Thread-safe state copy. Keys: `step`, `total`, `stage`, `done`, `error`, `error_msg`, `preview_path`, `noise_std_history` |
+| `fraction() → float` | `0.0–1.0` |
+| `elapsed_seconds() → float` | Wall time since creation |
+| `eta_seconds() → float \| None` | Linear estimate from last 8 step samples |
+| `set_step(step, stage="denoising")` | Called by callback on each denoising step |
+| `set_stage(stage)` | `"idle"` · `"loading model"` · `"denoising"` · `"saving"` · `"done"` · `"error"` |
+| `set_preview(path)` | Path to latest decoded preview PNG |
+| `set_noise_std(std: float)` | Append latent std sample — video pipelines, Variante 3 |
+| `mark_done()` | Sets `step=total`, `stage="done"`, `done=True` |
+| `mark_error(msg)` | Sets `error=True`, `error_msg=msg` |
 
+### `noise_std_history` (video — Variante 3)
+
+When `enable_noise_meter=True` is passed to a video pipeline, `tracker.snapshot()["noise_std_history"]` is populated with one `float` per denoising step. The values decrease monotonically from ~`1.0` (pure noise) toward ~`0.05–0.15` (converged). A flat or rising curve indicates a generation issue.
+
+```python
+snap = tracker.snapshot()
+history = snap["noise_std_history"]   # e.g. [0.98, 0.81, 0.62, 0.44, ...]
+```
 ---
 
 ## Accelerators

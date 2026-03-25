@@ -33,7 +33,7 @@ from genbox.utils.utils_image_pipeline import (
     resolve_dtype,
     resolve_offload_mode,
     resolve_seed,
-    set_scheduler,
+    set_scheduler, make_flux_step_callback,
 )
 
 log = logging.getLogger("genbox.pipeline_flux")
@@ -60,6 +60,9 @@ class FluxPipelineConfig:
     loras:          list      = field(default_factory=list)
     accel:          list      = field(default_factory=list)
     output:         Optional[Union[str, Path]] = None
+
+    enable_preview: bool = True  # decode latent previews during denoising
+    preview_interval: int = 5  # steps between preview decodes; 0 = disabled
 
 
 # ── Path helpers ───────────────────────────────────────────────────────────────
@@ -321,6 +324,7 @@ def text_to_image(
     loras_dir: Optional[Union[str, Path]] = None,
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
+    tracker=None,   # Optional[GenProgressTracker]
 ):
     """
     Run FLUX text-to-image generation.
@@ -359,6 +363,16 @@ def text_to_image(
         has_quantized_encoders=(cfg.t5_mode == "int8"),
     )
 
+    step_callback = None
+    if tracker is not None:
+        step_callback = make_flux_step_callback(
+            tracker=tracker,
+            height=cfg.height,
+            width=cfg.width,
+            preview_interval=cfg.preview_interval,
+            enable_preview=cfg.enable_preview,
+        )
+
     gen = make_generator(seed, device)
     kwargs = build_call_kwargs(
         architecture="flux",
@@ -366,6 +380,7 @@ def text_to_image(
         width=cfg.width, height=cfg.height,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen, t5_mode=cfg.t5_mode,
+        callback_on_step_end=step_callback,
     )
 
     result    = pipe(**kwargs)

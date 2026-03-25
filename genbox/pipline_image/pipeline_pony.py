@@ -32,7 +32,7 @@ from genbox.utils.utils_image_pipeline import (
     resolve_device,
     resolve_dtype,
     resolve_seed,
-    set_scheduler,
+    set_scheduler, make_sdl_step_callback,
 )
 from genbox.pipline_image.pipeline_sdl import (
     load_sdl_pipe,
@@ -116,11 +116,14 @@ def build_pony_call_kwargs(
     steps: int,
     guidance_scale: float,
     generator,
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     """
     Build pipeline __call__ kwargs for Pony/SDXL inference.
     Always includes negative_prompt (Pony is guidance-heavy).
+    callback_on_step_end: diffusers callback, fn(pipe, step, ts, cb_kwargs) → dict.
     """
     kwargs = dict(
         prompt              = prompt,
@@ -131,6 +134,12 @@ def build_pony_call_kwargs(
         guidance_scale      = guidance_scale,
         generator           = generator,
     )
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
     if extra:
         kwargs.update(extra)
     return kwargs
@@ -182,12 +191,14 @@ def text_to_image(
     loras_dir: Optional[Union[str, Path]] = None,
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ):
     """
     Run Pony Diffusion text-to-image generation.
 
-    Quality/rating tags are automatically prepended to prompt and negative_prompt
-    based on cfg.quality_tags and cfg.negative_quality_tags.
+    tracker: GenProgressTracker — live progress updates when provided.
 
     Returns:
         dict with keys: output_path, metadata, elapsed_s
@@ -199,26 +210,33 @@ def text_to_image(
     device = resolve_device()
     dtype  = resolve_dtype(entry.quant)
 
-    # Build Pony-enhanced prompts
-    full_prompt    = build_pony_prompt(cfg.prompt, cfg.quality_tags)
-    full_negative  = build_pony_negative_prompt(cfg.negative_prompt, cfg.negative_quality_tags)
+    full_prompt   = build_pony_prompt(cfg.prompt, cfg.quality_tags)
+    full_negative = build_pony_negative_prompt(cfg.negative_prompt, cfg.negative_quality_tags)
 
     log.info(
         f"Pony T2I | model={cfg.model_id} seed={seed} steps={cfg.steps} device={device}"
     )
 
-    # Pony uses the SDXL loader (architecture="sdxl")
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
     pipe = load_sdl_pipe(entry, models_dir, dtype)
     set_scheduler(pipe, "sdxl", cfg.sampler)
 
-    # LoRAs
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture="sdxl")
 
-    # Accelerators
     apply_pipeline_accelerators(
         pipe, device=device, vram_gb=vram_gb, accel=cfg.accel,
     )
+
+    step_callback = None
+    if tracker is not None:
+        step_callback = make_sdl_step_callback(
+            tracker=tracker,
+            preview_interval=preview_interval,
+            enable_preview=enable_preview,
+        )
 
     gen    = make_generator(seed, device)
     kwargs = build_pony_call_kwargs(
@@ -226,10 +244,17 @@ def text_to_image(
         width=cfg.width, height=cfg.height,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen,
+        callback_on_step_end=step_callback,
     )
+
+    if tracker is not None:
+        tracker.set_stage("denoising")
 
     result   = pipe(**kwargs)
     image    = result.images[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_output_path(

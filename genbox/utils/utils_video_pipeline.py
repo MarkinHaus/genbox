@@ -22,7 +22,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Callable
 
 from genbox.utils.utils_image_pipeline import (
     resolve_offload_mode,
@@ -276,6 +276,46 @@ def apply_video_accelerators(
         except Exception as e:
             log.warning(f"VAE tiling failed: {e}")
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# E2. Video step callback (Variante 1 + optional Variante 3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def make_video_step_callback(
+    tracker,                        # GenProgressTracker
+    enable_noise_meter: bool = False,
+) -> Callable:
+    """
+    Build a diffusers callback_on_step_end for video pipelines (WAN + LTX).
+
+    Variante 1 — immer aktiv:
+      tracker.set_step() pro Step → Fortschrittsbalken + ETA in der UI.
+
+    Variante 3 — opt-in via enable_noise_meter:
+      latents.float().std().item() → tracker.set_noise_std()
+      Funktioniert auf packed (B, seq, C) und unpacked (B, C, F, H, W) Tensoren
+      gleichermaßen — std() über alle Elemente ist formunabhängig.
+      float() cast verhindert NaN bei bfloat16 auf manchen Plattformen.
+      Kein VAE-Decode, kein VRAM-Overhead.
+
+    Callback-Signatur (diffusers-Standard):
+      fn(pipe, step_index: int, timestep: int, callback_kwargs: dict) → dict
+    """
+    def _callback(pipe, step_index: int, timestep, callback_kwargs: dict) -> dict:
+        try:
+            tracker.set_step(step_index, stage="denoising")
+
+            if enable_noise_meter:
+                latents = callback_kwargs.get("latents")
+                if latents is not None:
+                    std = latents.float().std().item()
+                    tracker.set_noise_std(std)
+        except Exception:
+            pass  # nie die Generation killen
+
+        return {}
+
+    return _callback
 
 # ──────────────────────────────────────────────────────────────────────────────
 # F. Video frame saver

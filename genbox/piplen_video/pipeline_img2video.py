@@ -29,6 +29,22 @@ from genbox.utils.utils_video_pipeline import (
 )
 from genbox.piplen_video.pipeline_wan import WanPipelineConfig
 from genbox.piplen_video.pipeline_ltx import LtxPipelineConfig
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional, Union
+
+from genbox.utils.utils_video_pipeline import (
+    apply_video_accelerators,
+    build_video_output_meta,
+    detect_wan_variant,
+    detect_ltx_variant,
+    ltx_generation_defaults,
+    snap_frames,
+    wan_generation_defaults,
+)
+from genbox.piplen_video.pipeline_wan import WanPipelineConfig
+from genbox.piplen_video.pipeline_ltx import LtxPipelineConfig
 
 log = logging.getLogger("genbox.pipeline_img2video")
 
@@ -219,19 +235,22 @@ def image_to_video(
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
     enable_vae_tiling: bool = False,
+    tracker=None,             # Optional[GenProgressTracker]
+    enable_noise_meter: bool = False,
 ) -> dict:
     """
     Run image-to-video generation.
     cfg.image must be set to a valid image path.
 
-    Automatically routes to pipeline_wan or pipeline_ltx based on cfg.backend.
+    tracker: GenProgressTracker — forwarded to the backend pipeline.
+    enable_noise_meter: forwarded to the backend pipeline (Variante 3).
 
     Returns dict with keys: output_path, metadata, elapsed_s
     """
     if cfg.image is None:
         raise ValueError("Img2VideoConfig.image must be set to a start-frame path")
 
-    backend = detect_i2v_backend(entry)  # validate entry matches config
+    backend = detect_i2v_backend(entry)
     if backend != cfg.backend:
         log.warning(
             f"Entry architecture implies backend={backend!r} "
@@ -246,6 +265,7 @@ def image_to_video(
             sub_cfg, entry, models_dir,
             loras_dir=loras_dir, outputs_dir=outputs_dir,
             vram_gb=vram_gb, enable_vae_tiling=enable_vae_tiling,
+            tracker=tracker, enable_noise_meter=enable_noise_meter,
         )
     else:
         from genbox.piplen_video.pipeline_ltx import generate as _ltx_gen
@@ -253,4 +273,5 @@ def image_to_video(
             sub_cfg, entry, models_dir,
             loras_dir=loras_dir, outputs_dir=outputs_dir,
             vram_gb=vram_gb,
+            tracker=tracker, enable_noise_meter=enable_noise_meter,
         )

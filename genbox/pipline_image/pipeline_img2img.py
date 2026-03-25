@@ -34,7 +34,7 @@ from genbox.utils.utils_image_pipeline import (
     resolve_dtype,
     resolve_offload_mode,
     resolve_seed,
-    set_scheduler,
+    set_scheduler, make_flux_step_callback, make_sdl_step_callback,
 )
 from genbox.pipline_image.pipeline_flux import (
     load_flux_pipe, )
@@ -114,6 +114,8 @@ def build_img2img_call_kwargs(
     steps: int,
     guidance_scale: float,
     generator,
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     kwargs: dict = dict(
@@ -126,6 +128,12 @@ def build_img2img_call_kwargs(
     )
     if architecture != "flux" and negative_prompt:
         kwargs["negative_prompt"] = negative_prompt
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
     if extra:
         kwargs.update(extra)
     return kwargs
@@ -223,10 +231,15 @@ def image_to_image(
     loras_dir: Optional[Union[str, Path]] = None,
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> dict:
     """
     Run image-to-image generation.
     cfg.input_image must be set to a valid image path.
+
+    tracker: GenProgressTracker — live progress updates when provided.
 
     Returns dict with keys: output_path, metadata, elapsed_s
     """
@@ -244,6 +257,9 @@ def image_to_image(
     log.info(f"I2I | arch={cfg.architecture} model={cfg.model_id} "
              f"strength={cfg.strength} seed={seed} device={device}")
 
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
     init_image = load_image(str(cfg.input_image)).convert("RGB")
     init_image = init_image.resize((cfg.width, cfg.height))
 
@@ -258,6 +274,24 @@ def image_to_image(
         has_quantized_encoders=(cfg.t5_mode == "int8"),
     )
 
+    # Arch-aware callback: FLUX latents are packed, SDL latents are spatial
+    step_callback = None
+    if tracker is not None:
+        if cfg.architecture == "flux":
+            step_callback = make_flux_step_callback(
+                tracker=tracker,
+                height=cfg.height,
+                width=cfg.width,
+                preview_interval=preview_interval,
+                enable_preview=enable_preview,
+            )
+        else:
+            step_callback = make_sdl_step_callback(
+                tracker=tracker,
+                preview_interval=preview_interval,
+                enable_preview=enable_preview,
+            )
+
     gen    = make_generator(seed, device)
     kwargs = build_img2img_call_kwargs(
         architecture=cfg.architecture,
@@ -265,10 +299,18 @@ def image_to_image(
         image=init_image, strength=cfg.strength,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen,
+        callback_on_step_end=step_callback,
     )
 
+    if tracker is not None:
+        tracker.set_stage("denoising")
+
+    kwargs.pop("strength", None)  # not supported by all variants
     result   = pipe(**kwargs)
     image    = result.images[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_output_path("i2i", cfg.model_id, seed, "png",

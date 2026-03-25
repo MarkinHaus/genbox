@@ -171,13 +171,16 @@ def build_wan_call_kwargs(
     guidance_scale: float,
     generator,
     image=None,
+    callback_on_step_end=None,
+    callback_tensor_inputs: Optional[list] = None,
     extra: Optional[dict] = None,
 ) -> dict:
     """
     Build pipeline __call__ kwargs for WAN T2V or I2V.
 
     I2V: image must be a PIL Image (pre-loaded by caller).
-    Both modes support negative_prompt.
+    callback_on_step_end: diffusers callback, fn(pipe, step, ts, cb_kwargs) → dict.
+    callback_tensor_inputs: defaults to ["latents"] when callback is set.
     """
     kwargs: dict = dict(
         prompt              = prompt,
@@ -194,6 +197,13 @@ def build_wan_call_kwargs(
 
     if mode == "i2v" and image is not None:
         kwargs["image"] = image
+
+    if callback_on_step_end is not None:
+        kwargs["callback_on_step_end"] = callback_on_step_end
+        kwargs["callback_on_step_end_tensor_inputs"] = (
+            callback_tensor_inputs if callback_tensor_inputs is not None
+            else ["latents"]
+        )
 
     if extra:
         kwargs.update(extra)
@@ -326,28 +336,24 @@ def generate(
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
     enable_vae_tiling: bool = False,
+    tracker=None,             # Optional[GenProgressTracker] — Variante 1 + 3
+    enable_noise_meter: bool = False,  # Variante 3
 ) -> dict:
     """
     Run WAN video generation (T2V or I2V).
 
-    Args:
-        cfg:               WanPipelineConfig
-        entry:             ModelEntry from REGISTRY
-        models_dir:        root models directory
-        loras_dir:         root LoRA directory (for relative LoRA paths)
-        outputs_dir:       root outputs directory
-        vram_gb:           available VRAM (for offload strategy)
-        enable_vae_tiling: enable VAE tiling for large resolutions
+    tracker: GenProgressTracker — live step/stage/noise updates when provided.
+    enable_noise_meter: append latent std() per step to tracker.noise_std_history.
 
     Returns:
         dict with keys: output_path, metadata, elapsed_s
     """
     import time
 
-    t0     = time.time()
-    seed   = resolve_seed(cfg.seed)
-    device = resolve_device()
-    dtype  = resolve_dtype(entry.quant)
+    t0      = time.time()
+    seed    = resolve_seed(cfg.seed)
+    device  = resolve_device()
+    dtype   = resolve_dtype(entry.quant)
     variant = detect_wan_variant(cfg.model_id)
 
     log.info(
@@ -355,10 +361,12 @@ def generate(
         f"seed={seed} frames={cfg.frames} {cfg.width}x{cfg.height} device={device}"
     )
 
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
     pipe = load_wan_pipe(entry, models_dir, dtype, mode=cfg.mode)
     _apply_wan_scheduler(pipe, cfg.height)
 
-    # LoRAs
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture="wan")
 
@@ -367,9 +375,15 @@ def generate(
         accel=cfg.accel, enable_vae_tiling=enable_vae_tiling,
     )
 
+    step_callback = None
+    if tracker is not None:
+        from genbox.utils.utils_video_pipeline import make_video_step_callback
+        step_callback = make_video_step_callback(
+            tracker, enable_noise_meter=enable_noise_meter
+        )
+
     gen = make_generator(seed, device)
 
-    # Load image for I2V
     image = None
     if cfg.mode == "i2v" and cfg.image is not None:
         from diffusers.utils import load_image  # type: ignore
@@ -383,13 +397,24 @@ def generate(
         width=cfg.width, height=cfg.height, frames=frames_count,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen, image=image,
+        callback_on_step_end=step_callback,
     )
 
+    if tracker is not None:
+        tracker.set_stage("denoising")
+
     result = pipe(**kwargs)
-    video_frames = getattr(result, "frames", None) or getattr(result, "videos", None)
+    frames = getattr(result, "frames", None)
+    if frames is not None:
+        video_frames = frames
+    else:
+        video_frames = getattr(result, "videos", None)
     if video_frames is None:
         raise RuntimeError("WAN pipeline returned no frames — check diffusers version")
     video_frames = video_frames[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_video_output_path(

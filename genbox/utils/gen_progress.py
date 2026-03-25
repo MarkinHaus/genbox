@@ -56,6 +56,7 @@ class GenProgressTracker:
             "error":        False,
             "error_msg":    "",
             "preview_path": None,
+            "noise_std_history": [],
         }
         self._start_time: float = time.monotonic()
         # (monotonic_time, step) pairs for ETA estimation
@@ -125,6 +126,15 @@ class GenProgressTracker:
             self._state["error"]     = True
             self._state["error_msg"] = msg
             self._state["stage"]     = "error"
+
+    def set_noise_std(self, std: float):
+        """
+        Append a latent noise std sample to the history (Variante 3).
+        Called from the video step callback after each denoising step.
+        Thread-safe. Values are rounded to 4 decimal places.
+        """
+        with self._lock:
+            self._state["noise_std_history"].append(round(std, 4))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -196,11 +206,17 @@ def make_step_callback(
 
     The callback:
       1. Updates tracker.step and stage
-      2. Every `preview_interval` steps, calls decode_fn(latents, pipe)
+      2. Every `preview_interval` steps, calls decode_fn(latents, pipe, step_index)
          if provided, and updates tracker.preview_path
 
     Signature matches diffusers callback_on_step_end:
       fn(pipe, step_index: int, timestep: int, callback_kwargs: dict) → dict
+      First arg is the pipeline instance (self of the pipeline).
+
+    decode_fn contract: (latents, pipe, step_index: int) -> Optional[Path]
+      Use a lambda or functools.partial to pre-bind architecture-specific
+      params (e.g. height/width for FLUX unpacking).
+      For FLUX use make_flux_step_callback() from utils_image_pipeline instead.
 
     The callback NEVER raises — any internal error is silently swallowed
     so generation can continue unaffected.
@@ -221,7 +237,8 @@ def make_step_callback(
             ):
                 latents = callback_kwargs.get("latents")
                 if latents is not None:
-                    path = decode_fn(latents, pipe)
+                    # decode_fn receives (latents, pipe, step_index)
+                    path = decode_fn(latents, pipe, step_index)
                     if path is not None:
                         tracker.set_preview(path)
         except Exception:

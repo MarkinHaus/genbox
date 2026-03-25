@@ -197,17 +197,14 @@ def outpaint(
     loras_dir: Optional[Union[str, Path]] = None,
     outputs_dir: Optional[Union[str, Path]] = None,
     vram_gb: int = 16,
+    tracker=None,            # Optional[GenProgressTracker]
+    enable_preview: bool = True,
+    preview_interval: int = 5,
 ) -> dict:
     """
     Run outpainting — extend the image on any combination of sides.
 
-    Workflow:
-      1. Load original image
-      2. Expand canvas (fill borders with black/fill_color)
-      3. Create binary mask (white = expanded region)
-      4. Feather mask at seam
-      5. Run inpaint pipeline on the expanded canvas
-      6. Save result
+    tracker: GenProgressTracker — forwarded to the inpaint call.
 
     Returns dict with keys: output_path, metadata, elapsed_s
     """
@@ -227,21 +224,20 @@ def outpaint(
     log.info(f"Outpaint | arch={cfg.architecture} model={cfg.model_id} "
              f"expand L{cfg.left} R{cfg.right} T{cfg.top} B{cfg.bottom} seed={seed}")
 
-    original = load_image(str(cfg.input_image)).convert("RGB")
+    if tracker is not None:
+        tracker.set_stage("loading model")
+
+    original  = load_image(str(cfg.input_image)).convert("RGB")
     orig_size = original.size
 
-    # Step 1+2: expand canvas and generate border mask
     canvas, raw_mask = expand_canvas(
         original,
         left=cfg.left, right=cfg.right,
         top=cfg.top, bottom=cfg.bottom,
     )
-
-    # Step 3: feather seam
-    mask = feather_mask(raw_mask, radius=cfg.feather_radius)
+    mask        = feather_mask(raw_mask, radius=cfg.feather_radius)
     canvas_size = canvas.size
 
-    # Step 4: run inpaint
     pipe = load_inpaint_pipe(entry, models_dir, dtype, t5_mode=cfg.t5_mode)
     set_scheduler(pipe, cfg.architecture, cfg.sampler)
 
@@ -253,6 +249,27 @@ def outpaint(
         has_quantized_encoders=(cfg.t5_mode == "int8"),
     )
 
+    # Callback wired via build_inpaint_call_kwargs — arch-aware
+    from genbox.utils.utils_image_pipeline import (
+        make_flux_step_callback, make_sdl_step_callback,
+    )
+    step_callback = None
+    if tracker is not None:
+        if cfg.architecture == "flux":
+            step_callback = make_flux_step_callback(
+                tracker=tracker,
+                height=canvas_size[1],
+                width=canvas_size[0],
+                preview_interval=preview_interval,
+                enable_preview=enable_preview,
+            )
+        else:
+            step_callback = make_sdl_step_callback(
+                tracker=tracker,
+                preview_interval=preview_interval,
+                enable_preview=enable_preview,
+            )
+
     gen    = make_generator(seed, device)
     kwargs = build_inpaint_call_kwargs(
         architecture=cfg.architecture,
@@ -262,10 +279,18 @@ def outpaint(
         strength=cfg.strength,
         steps=cfg.steps, guidance_scale=cfg.guidance_scale,
         generator=gen,
+        callback_on_step_end=step_callback,
     )
 
+    if tracker is not None:
+        tracker.set_stage("denoising")
+
+    kwargs.pop("strength", None)  # not supported by all variants
     result   = pipe(**kwargs)
     image    = result.images[0]
+
+    if tracker is not None:
+        tracker.set_stage("saving")
 
     _out_dir = Path(outputs_dir) if outputs_dir else Path.cwd() / "genbox_outputs"
     out_path = build_output_path("outp", cfg.model_id, seed, "png",
