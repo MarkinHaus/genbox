@@ -1,0 +1,1939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>genbox | Local AI Image & Video Generation</title>
+    <meta name="description" content="Local AI image and video generation. Runs on consumer hardware (8–24 GB VRAM). FLUX, Stable Diffusion, WAN, LTX-Video support.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* ===== GENBOX DESIGN SYSTEM ===== */
+        :root {
+            --bg-primary: #0d0d0d;
+            --bg-secondary: #111111;
+            --bg-tertiary: #141414;
+            --bg-card: #141414;
+            --border-color: #2a2a2a;
+            --border-hover: #4a9eff;
+            --text-primary: #c8c8c8;
+            --text-secondary: #6b6b6b;
+            --text-muted: #3a3a3a;
+            --text-heading: #e0e0e0;
+            --accent: #4a9eff;
+            --accent-dim: rgba(74, 158, 255, 0.15);
+            --success: #2dd4a0;
+            --warning: #ffaa00;
+            --error: #ff4a4a;
+            --font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            --transition-fast: 0.15s ease;
+            --transition-normal: 0.3s ease;
+            --transition-smooth: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 14px;
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ===== SCROLLBAR ===== */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent);
+        }
+
+        /* ===== TYPOGRAPHY ===== */
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 500;
+            letter-spacing: 0.04em;
+            color: var(--text-heading);
+            line-height: 1.3;
+        }
+
+        h1 {
+            font-size: clamp(28px, 5vw, 48px);
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+
+        h2 {
+            font-size: clamp(20px, 3vw, 28px);
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h3 {
+            font-size: clamp(16px, 2.5vw, 20px);
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        p {
+            margin-bottom: 16px;
+            max-width: 65ch;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            transition: color var(--transition-fast);
+        }
+
+        a:hover {
+            color: var(--accent);
+        }
+
+        /* ===== BUTTONS ===== */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 24px;
+            font-family: var(--font-family);
+            font-size: 13px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+        }
+
+        .btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--bg-primary);
+        }
+
+        .btn:active {
+            background: var(--accent-dim);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-primary);
+            opacity: 0.9;
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+
+        /* ===== HEADER ===== */
+        header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: rgba(13, 13, 13, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+            transition: all var(--transition-normal);
+        }
+
+        header.scrolled {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent);
+            letter-spacing: 0.08em;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), var(--success));
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: var(--bg-primary);
+            font-size: 14px;
+        }
+
+        nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        nav a {
+            padding: 8px 12px;
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            transition: all var(--transition-fast);
+            border-radius: 2px;
+        }
+
+        nav a:hover {
+            color: var(--accent);
+            background: var(--bg-tertiary);
+        }
+
+        .mobile-menu-btn {
+            display: none;
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        /* ===== HERO SECTION ===== */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            padding: 120px 24px 80px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(74, 158, 255, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 80% 50%, rgba(45, 212, 160, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        .hero-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-tag {
+            display: inline-block;
+            padding: 6px 12px;
+            font-size: 11px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            background: var(--accent-dim);
+            border: 1px solid var(--accent);
+            border-radius: 2px;
+            color: var(--accent);
+            margin-bottom: 24px;
+        }
+
+        .hero-title {
+            line-height: 1.2;
+            margin-bottom: 20px;
+        }
+
+        .hero-subtitle {
+            font-size: 16px;
+            color: var(--text-secondary);
+            margin-bottom: 32px;
+            line-height: 1.8;
+        }
+
+        .hero-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 40px;
+        }
+
+        .hero-terminal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            animation: float 6s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .terminal-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .terminal-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: var(--error); }
+        .terminal-dot.yellow { background: var(--warning); }
+        .terminal-dot.green { background: var(--success); }
+
+        .terminal-title {
+            margin-left: 12px;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .terminal-body {
+            padding: 20px;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+
+        .terminal-line {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .terminal-prompt {
+            color: var(--success);
+        }
+
+        .terminal-command {
+            color: var(--text-primary);
+        }
+
+        .terminal-output {
+            color: var(--text-secondary);
+        }
+
+        .terminal-cursor {
+            display: inline-block;
+            width: 8px;
+            height: 16px;
+            background: var(--accent);
+            animation: blink 1s step-end infinite;
+            vertical-align: middle;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        /* ===== SECTIONS ===== */
+        section {
+            padding: 80px 24px;
+        }
+
+        .section-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+
+        .section-header h2 {
+            display: inline-block;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .section-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 16px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* ===== FEATURES ===== */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 32px;
+            transition: all var(--transition-normal);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--success));
+            opacity: 0;
+            transition: opacity var(--transition-normal);
+        }
+
+        .feature-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+        }
+
+        .feature-card:hover::before {
+            opacity: 1;
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+            font-size: 20px;
+            color: var(--accent);
+            transition: all var(--transition-normal);
+        }
+
+        .feature-card:hover .feature-icon {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+        }
+
+        .feature-title {
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: var(--text-heading);
+        }
+
+        .feature-desc {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.7;
+        }
+
+        /* ===== MODELS ===== */
+        .models-section {
+            background: var(--bg-secondary);
+        }
+
+        .models-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+        }
+
+        .models-tab {
+            padding: 12px 24px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+
+        .models-tab:hover,
+        .models-tab.active {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .model-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            padding: 20px;
+            transition: all var(--transition-fast);
+            cursor: pointer;
+        }
+
+        .model-card:hover {
+            border-color: var(--accent);
+        }
+
+        .model-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .model-id {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent);
+            word-break: break-all;
+        }
+
+.model-vram {
+padding: 4px 8px;
+background: var(--bg-tertiary);
+border: 1px solid var(--border-color);
+border-radius: 2px;
+font-size: 11px;
+color: var(--success);
+white-space: nowrap;
+}
+
+.model-name {
+font-size: 13px;
+color: var(--text-heading);
+margin-bottom: 4px;
+}
+
+.model-quant {
+font-size: 11px;
+color: var(--text-secondary);
+}
+
+.model-badge {
+display: inline-block;
+padding: 2px 6px;
+background: var(--bg-tertiary);
+border: 1px solid var(--border-color);
+border-radius: 2px;
+font-size: 10px;
+color: var(--text-secondary);
+margin-top: 8px;
+}
+
+/* ===== CODE BLOCKS ===== */
+.code-block {
+background: var(--bg-secondary);
+border: 1px solid var(--border-color);
+border-radius: 4px;
+overflow: hidden;
+margin: 24px 0;
+}
+
+.code-header {
+display: flex;
+align-items: center;
+justify-content: space-between;
+padding: 12px 16px;
+background: var(--bg-tertiary);
+border-bottom: 1px solid var(--border-color);
+}
+
+.code-lang {
+font-size: 11px;
+color: var(--text-muted);
+text-transform: uppercase;
+letter-spacing: 0.08em;
+}
+
+.code-copy {
+padding: 6px 12px;
+background: var(--bg-primary);
+border: 1px solid var(--border-color);
+border-radius: 2px;
+color: var(--text-secondary);
+font-size: 11px;
+cursor: pointer;
+transition: all var(--transition-fast);
+}
+
+.code-copy:hover {
+border-color: var(--accent);
+color: var(--accent);
+}
+
+.code-content {
+padding: 20px;
+overflow-x: auto;
+}
+
+pre {
+margin: 0;
+font-family: var(--font-family);
+font-size: 13px;
+line-height: 1.7;
+}
+
+code {
+color: var(--text-primary);
+}
+
+code .keyword { color: #ff79c6; }
+code .string { color: #2dd4a0; }
+code .comment { color: #6272a4; }
+code .function { color: #8be9fd; }
+code .variable { color: #f1fa8c; }
+
+/* ===== TABLES ===== */
+.table-container {
+overflow-x: auto;
+border: 1px solid var(--border-color);
+border-radius: 4px;
+margin: 24px 0;
+}
+
+table {
+width: 100%;
+border-collapse: collapse;
+font-size: 13px;
+}
+
+th {
+background: var(--bg-tertiary);
+border-bottom: 1px solid var(--border-color);
+border-right: 1px solid var(--border-color);
+padding: 12px 16px;
+text-align: left;
+font-weight: 500;
+color: var(--text-heading);
+}
+
+th:last-child {
+border-right: none;
+}
+
+td {
+border-bottom: 1px solid var(--border-color);
+border-right: 1px solid var(--border-color);
+padding: 12px 16px;
+color: var(--text-secondary);
+}
+
+td:last-child {
+border-right: none;
+}
+
+tr:last-child td {
+border-bottom: none;
+}
+
+/* ===== API EXAMPLES ===== */
+.api-grid {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+gap: 24px;
+}
+
+.api-card {
+background: var(--bg-card);
+border: 1px solid var(--border-color);
+border-radius: 4px;
+overflow: hidden;
+}
+
+.api-header {
+padding: 16px 20px;
+background: var(--bg-tertiary);
+border-bottom: 1px solid var(--border-color);
+display: flex;
+align-items: center;
+gap: 12px;
+}
+
+.api-method {
+padding: 4px 8px;
+border-radius: 2px;
+font-size: 11px;
+font-weight: 600;
+text-transform: uppercase;
+}
+
+.api-method.get { background: rgba(45, 212, 160, 0.2); color: var(--success); }
+.api-method.post { background: rgba(74, 158, 255, 0.2); color: var(--accent); }
+
+.api-title {
+font-size: 14px;
+color: var(--text-heading);
+}
+
+.api-body {
+padding: 20px;
+}
+
+/* ===== INSTALLATION ===== */
+.install-section {
+background: var(--bg-secondary);
+}
+
+.install-steps {
+max-width: 800px;
+margin: 0 auto;
+}
+
+.step {
+display: flex;
+gap: 20px;
+margin-bottom: 32px;
+}
+
+.step-number {
+flex-shrink: 0;
+width: 36px;
+height: 36px;
+background: var(--accent);
+border-radius: 4px;
+display: flex;
+align-items: center;
+justify-content: center;
+font-weight: 600;
+color: var(--bg-primary);
+font-size: 14px;
+}
+
+.step-content {
+flex: 1;
+}
+
+.step-title {
+font-size: 16px;
+color: var(--text-heading);
+margin-bottom: 8px;
+}
+
+.step-desc {
+color: var(--text-secondary);
+margin-bottom: 12px;
+}
+
+/* ===== STATS ===== */
+.stats-section {
+padding: 60px 24px;
+background: linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+}
+
+.stats-grid {
+max-width: 1400px;
+margin: 0 auto;
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+gap: 32px;
+}
+
+.stat-item {
+text-align: center;
+padding: 24px;
+}
+
+.stat-value {
+font-size: 48px;
+font-weight: 700;
+color: var(--accent);
+margin-bottom: 8px;
+line-height: 1;
+}
+
+.stat-label {
+font-size: 12px;
+color: var(--text-secondary);
+letter-spacing: 0.08em;
+text-transform: uppercase;
+}
+
+/* ===== FOOTER ===== */
+footer {
+background: var(--bg-secondary);
+border-top: 1px solid var(--border-color);
+padding: 60px 24px 24px;
+}
+
+.footer-inner {
+max-width: 1400px;
+margin: 0 auto;
+}
+
+.footer-grid {
+display: grid;
+grid-template-columns: 2fr 1fr 1fr 1fr;
+gap: 40px;
+margin-bottom: 40px;
+}
+
+.footer-brand h3 {
+font-size: 18px;
+color: var(--accent);
+margin-bottom: 12px;
+}
+
+.footer-brand p {
+color: var(--text-secondary);
+font-size: 13px;
+}
+
+.footer-links h4 {
+font-size: 12px;
+text-transform: uppercase;
+letter-spacing: 0.08em;
+color: var(--text-heading);
+margin-bottom: 16px;
+}
+
+.footer-links ul {
+list-style: none;
+}
+
+.footer-links li {
+margin-bottom: 8px;
+}
+
+.footer-links a {
+color: var(--text-secondary);
+font-size: 13px;
+transition: color var(--transition-fast);
+}
+
+.footer-links a:hover {
+color: var(--accent);
+}
+
+.footer-bottom {
+display: flex;
+align-items: center;
+justify-content: space-between;
+padding-top: 24px;
+border-top: 1px solid var(--border-color);
+}
+
+.footer-copyright {
+color: var(--text-muted);
+font-size: 12px;
+}
+
+.footer-links-inline {
+display: flex;
+gap: 24px;
+}
+
+.footer-links-inline a {
+color: var(--text-secondary);
+font-size: 12px;
+}
+
+/* ===== ANIMATIONS ===== */
+.fade-in {
+opacity: 0;
+transform: translateY(20px);
+transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.fade-in.visible {
+opacity: 1;
+transform: translateY(0);
+}
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 1024px) {
+.hero-inner {
+grid-template-columns: 1fr;
+text-align: center;
+}
+
+.hero-terminal {
+max-width: 600px;
+margin: 0 auto;
+}
+
+.api-grid {
+grid-template-columns: 1fr;
+}
+
+.footer-grid {
+grid-template-columns: 1fr 1fr;
+}
+}
+
+@media (max-width: 768px) {
+.header-inner {
+flex-wrap: wrap;
+}
+
+nav {
+display: none;
+}
+
+.mobile-menu-btn {
+display: block;
+}
+
+.footer-grid {
+grid-template-columns: 1fr;
+}
+
+.footer-bottom {
+flex-direction: column;
+gap: 16px;
+text-align: center;
+}
+}
+</style>
+</head>
+<body>
+<!-- ===== HEADER ===== -->
+<header id="header">
+<div class="header-inner">
+<a href="#" class="logo">
+<div class="logo-icon">G</div>
+genbox
+</a>
+<nav>
+<a href="#features">Features</a>
+<a href="#models">Models</a>
+<a href="#installation">Install</a>
+<a href="#api">API</a>
+<a href="https://github.com/you/genbox" target="_blank">GitHub</a>
+</nav>
+<div style="margin-left: auto; display: flex; gap: 12px; align-items: center;">
+<a href="#installation" class="btn btn-primary btn-sm">Get Started</a>
+<button class="mobile-menu-btn">☰</button>
+</div>
+</div>
+</header>
+
+<!-- ===== HERO SECTION ===== -->
+<section class="hero">
+<div class="hero-inner">
+<div class="hero-content fade-in">
+<span class="hero-tag">Local AI • No Cloud • Privacy First</span>
+<h1 class="hero-title">Professional AI Image & Video Generation on Your Hardware</h1>
+<p class="hero-subtitle">
+Generate stunning images and videos locally using FLUX, Stable Diffusion, WAN, and LTX-Video. 
+Runs on consumer hardware with 8–24 GB VRAM. No subscriptions, no data leaves your machine.
+</p>
+<div class="hero-actions">
+<a href="#installation" class="btn btn-primary">Start Generating</a>
+<a href="#models" class="btn">Browse Models</a>
+<a href="https://github.com/you/genbox" class="btn" target="_blank">View on GitHub</a>
+</div>
+</div>
+
+<div class="hero-terminal fade-in">
+<div class="terminal-header">
+<div class="terminal-dots">
+<div class="terminal-dot red"></div>
+<div class="terminal-dot yellow"></div>
+<div class="terminal-dot green"></div>
+</div>
+<span class="terminal-title">genbox terminal</span>
+</div>
+<div class="terminal-body">
+<div class="terminal-line">
+<span class="terminal-prompt">$</span>
+<span class="terminal-command">genbox setup</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-output">✓ VRAM detected: 12 GB</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-output">✓ Config written to ~/.genbox/config.toml</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-prompt">$</span>
+<span class="terminal-command">genbox gen -p "a brutalist tower at dusk"</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-output">Model: flux2_klein (10 GB VRAM)</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-output">Generating... <span id="progress-text">████████░░░░░░░░</span> 67%</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-output success">✓ Output: img_0001_flux2_klein_seed42.png (2.3s)</span>
+</div>
+<div class="terminal-line">
+<span class="terminal-prompt">$</span>
+<span class="terminal-cursor"></span>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ===== STATS SECTION ===== -->
+<section class="stats-section">
+<div class="stats-grid">
+<div class="stat-item fade-in">
+<div class="stat-value">28+</div>
+<div class="stat-label">Supported Models</div>
+</div>
+<div class="stat-item fade-in">
+<div class="stat-value">8GB</div>
+<div class="stat-label">Minimum VRAM</div>
+</div>
+<div class="stat-item fade-in">
+<div class="stat-value">100%</div>
+<div class="stat-label">Local Execution</div>
+</div>
+<div class="stat-item fade-in">
+<div class="stat-value">2.3s</div>
+<div class="stat-label">Avg Generation Time</div>
+</div>
+</div>
+</section>
+
+<!-- ===== FEATURES SECTION ===== -->
+<section id="features">
+<div class="section-inner">
+<div class="section-header fade-in">
+<h2>Why genbox?</h2>
+<p class="section-subtitle">
+Everything you need for professional AI content generation, running entirely on your own hardware.
+</p>
+</div>
+
+<div class="features-grid">
+<div class="feature-card fade-in">
+<div class="feature-icon">🎨</div>
+<h3 class="feature-title">Image Generation</h3>
+<p class="feature-desc">
+Text-to-image, image-to-image, inpainting, and outpainting. 
+Support for FLUX.1/2, Stable Diffusion 1.5/3.5/XL, and more.
+</p>
+</div>
+
+<div class="feature-card fade-in">
+<div class="feature-icon">🎬</div>
+<h3 class="feature-title">Video Generation</h3>
+<p class="feature-desc">
+Text-to-video and image-to-video pipelines. 
+WAN 2.1/2.2, LTX-Video, and LTX-2 support for cinematic results.
+</p>
+</div>
+
+<div class="feature-card fade-in">
+<div class="feature-icon">⚡</div>
+<h3 class="feature-title">Accelerators</h3>
+<p class="feature-desc">
+SageAttention, TeaCache, xformers, and torch.compile 
+for up to 3x faster generation on supported hardware.
+</p>
+</div>
+
+<div class="feature-card fade-in">
+<div class="feature-icon">🎭</div>
+<h3 class="feature-title">LoRA Support</h3>
+<p class="feature-desc">
+Advanced LoRA management with metadata, preview images, 
+and architecture-specific triggers for custom styles.
+</p>
+</div>
+
+<div class="feature-card fade-in">
+<div class="feature-icon">💻</div>
+<h3 class="feature-title">CLI & Python API</h3>
+<p class="feature-desc">
+Powerful command-line interface and clean Python API 
+for automation, batch processing, and integration.
+</p>
+</div>
+
+<div class="feature-card fade-in">
+<div class="feature-icon">🖥️</div>
+<h3 class="feature-title">Web UI</h3>
+<p class="feature-desc">
+Built-in Streamlit-based UI with real-time progress tracking, 
+preview generation, and intuitive controls.
+</p>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ===== MODELS SECTION ===== -->
+<section id="models" class="models-section">
+<div class="section-inner">
+<div class="section-header fade-in">
+<h2>Supported Models</h2>
+<p class="section-subtitle">
+Choose from 28+ pre-configured models optimized for different VRAM profiles.
+</p>
+</div>
+
+<div class="models-tabs fade-in">
+<button class="models-tab active" data-tab="image">Image Models</button>
+<button class="models-tab" data-tab="video">Video Models</button>
+<button class="models-tab" data-tab="all">All Models</button>
+</div>
+
+<div id="models-image" class="models-grid model-tab-content">
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">flux2_klein</div>
+<div class="model-name">FLUX.2 Klein 4B</div>
+</div>
+<div class="model-vram">10 GB</div>
+</div>
+<div class="model-quant">fp8 quantization</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">unsloth_flux2_9b_q4</div>
+<div class="model-name">FLUX.2 Klein 9B</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">GGUF Q4 quantization</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">flux1_schnell_q8</div>
+<div class="model-name">FLUX.1 Schnell</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">GGUF Q8 quantization</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">sd35_medium</div>
+<div class="model-name">Stable Diffusion 3.5 Medium</div>
+</div>
+<div class="model-vram">6 GB</div>
+</div>
+<div class="model-quant">fp16</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">sdxl_base</div>
+<div class="model-name">Stable Diffusion XL 1.0</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">fp16</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">animagine_xl</div>
+<div class="model-name">Animagine XL 4.0</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">fp16 • Anime specialized</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">pony_xl</div>
+<div class="model-name">Pony Diffusion v6 XL</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">fp16 • SDXL derivative</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">sdxl_turbo</div>
+<div class="model-name">SDXL Turbo</div>
+</div>
+<div class="model-vram">5 GB</div>
+</div>
+<div class="model-quant">fp16 • Fast inference</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">sd15_base</div>
+<div class="model-name">Stable Diffusion 1.5</div>
+</div>
+<div class="model-vram">4 GB</div>
+</div>
+<div class="model-quant">fp16 • Classic model</div>
+</div>
+</div>
+
+<div id="models-video" class="models-grid model-tab-content" style="display: none;">
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">wan_1_3b</div>
+<div class="model-name">WAN 2.1 T2V-1.3B</div>
+</div>
+<div class="model-vram">8 GB</div>
+</div>
+<div class="model-quant">480p video generation</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">wan21_14b_diffusers</div>
+<div class="model-name">WAN 2.1 T2V-14B</div>
+</div>
+<div class="model-vram">16 GB</div>
+</div>
+<div class="model-quant">480p/720p • High quality</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">ltx2_fp8</div>
+<div class="model-name">LTX-Video 0.9.5</div>
+</div>
+<div class="model-vram">10 GB</div>
+</div>
+<div class="model-quant">bf16 • Real-time capable</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">ltx23_fp8</div>
+<div class="model-name">LTX-Video 0.9.7 Distilled</div>
+</div>
+<div class="model-vram">12 GB</div>
+</div>
+<div class="model-quant">13B parameters • Enhanced</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">ltx2_model</div>
+<div class="model-name">LTX-2</div>
+</div>
+<div class="model-vram">14 GB</div>
+</div>
+<div class="model-quant">Joint Audio-Visual</div>
+</div>
+
+<div class="model-card fade-in">
+<div class="model-header">
+<div>
+<div class="model-id">wan22_1_4b</div>
+<div class="model-name">WAN 2.2 T2V-A14B</div>
+</div>
+<div class="model-vram">24 GB</div>
+</div>
+<div class="model-quant">MoE • 720p video</div>
+</div>
+</div>
+
+<div id="models-all" class="models-grid model-tab-content" style="display: none;">
+<!-- All models combined (shown via JS) -->
+<div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--text-secondary);">
+<p>Use the tabs above to browse Image or Video models.</p>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ===== INSTALLATION SECTION ===== -->
+<section id="installation" class="install-section">
+<div class="section-inner">
+<div class="section-header fade-in">
+<h2>Quick Installation</h2>
+<p class="section-subtitle">
+Get up and running in under 5 minutes. No complex dependencies required.
+</p>
+</div>
+
+<div class="install-steps">
+<div class="step fade-in">
+<div class="step-number">1</div>
+<div class="step-content">
+<h3 class="step-title">Clone and Install</h3>
+<p class="step-desc">Install genbox with the image and video generation packages.</p>
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Bash</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="comment"># Clone the repository</span>
+git clone https://github.com/you/genbox
+<span class="keyword">cd</span> genbox
+
+<span class="comment"># Install with all features (recommended)</span>
+pip install -e <span class="string">".[all]"</span>
+
+<span class="comment"># Or install selectively</span>
+pip install -e <span class="string">".[image]"</span>  <span class="comment"># image generation only</span>
+pip install -e <span class="string">".[image,video]"</span>  <span class="comment"># + video generation</span></code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="step fade-in">
+<div class="step-number">2</div>
+<div class="step-content">
+<h3 class="step-title">Run Setup Wizard</h3>
+<p class="step-desc">The setup wizard detects your hardware and creates an optimized configuration.</p>
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Bash</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="comment"># Interactive setup - detects VRAM automatically</span>
+genbox setup
+
+<span class="comment"># Or force re-configuration</span>
+genbox setup --force
+
+<span class="comment"># Install default models for your VRAM profile</span>
+genbox models install-defaults
+
+<span class="comment"># Install for specific VRAM profile (dry-run first)</span>
+genbox models install-defaults --profile 12gb_balanced --dry-run</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="step fade-in">
+<div class="step-number">3</div>
+<div class="step-content">
+<h3 class="step-title">Start Generating</h3>
+<p class="step-desc">Use the CLI or launch the web UI for an interactive experience.</p>
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Bash</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="comment"># Generate an image via CLI</span>
+genbox gen -p <span class="string">"a brutalist tower at dusk, fog, cinematic"</span> \
+  --model flux2_klein \
+  --width 1024 --height 1024
+
+<span class="comment"># Generate a video</span>
+genbox gen -p <span class="string">"a serene lake at sunrise"</span> \
+  --mode t2v \
+  --model wan_1_3b \
+  --frames 48 --fps 24
+
+<span class="comment"># Launch the web UI (Streamlit)</span>
+genbox ui  <span class="comment"># opens at http://localhost:8501</span></code></pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ===== PYTHON API SECTION ===== -->
+<section id="api" class="api-section">
+<div class="section-inner">
+<div class="section-header fade-in">
+<h2>Python API</h2>
+<p class="section-subtitle">
+Clean, intuitive Python API for seamless integration into your workflow.
+</p>
+</div>
+
+<div class="api-grid">
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method post">T2I</span>
+<span class="api-title">Text to Image</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.text_to_image(
+prompt=<span class="string">"a cyberpunk cityscape"</span>,
+model=<span class="string">"flux2_klein"</span>,
+width=<span class="variable">1024</span>,
+height=<span class="variable">1024</span>,
+steps=<span class="variable">28</span>,
+guidance=<span class="variable">3.5</span>,
+seed=<span class="variable">-1</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method put">I2I</span>
+<span class="api-title">Image to Image</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.image_to_image(
+prompt=<span class="string">"transform to oil painting"</span>,
+input_image=<span class="string">"photo.jpg"</span>,
+model=<span class="string">"sdxl_base"</span>,
+strength=<span class="variable">0.75</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method get">T2V</span>
+<span class="api-title">Text to Video</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.text_to_video(
+prompt=<span class="string">"ocean waves at sunset"</span>,
+model=<span class="string">"wan_1_3b"</span>,
+frames=<span class="variable">48</span>,
+fps=<span class="variable">24</span>,
+width=<span class="variable">480</span>,
+height=<span class="variable">480</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method put">INP</span>
+<span class="api-title">Inpainting</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.inpaint(
+prompt=<span class="string">"remove the person"</span>,
+input_image=<span class="string">"photo.png"</span>,
+mask_image=<span class="string">"mask.png"</span>,
+strength=<span class="variable">0.99</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ===== CLI EXAMPLES SECTION ===== -->
+<section id="cli">
+<div class="section-inner">
+<div class="section-header fade-in">
+<h2>CLI Reference</h2>
+<p class="section-subtitle">
+Powerful command-line interface for automation and batch processing.
+</p>
+</div>
+
+<div class="api-grid">
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method put">INP</span>
+<span class="api-title">Inpainting</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.inpaint(
+    prompt=<span class="string">"a serene mountain landscape"</span>,
+    input_image=<span class="string">"photo.png"</span>,
+    mask_image=<span class="string">"mask.png"</span>,
+    strength=<span class="variable">0.99</span>,
+    blur_radius=<span class="variable">8</span>,
+    dilate_pixels=<span class="variable">4</span>,
+    mask_mode=<span class="string">"white_inpaint"</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method post">OUT</span>
+<span class="api-title">Outpainting</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.outpaint(
+    prompt=<span class="string">"extend the forest scene"</span>,
+    input_image=<span class="string">"photo.png"</span>,
+    left=<span class="variable">0</span>,
+    right=<span class="variable">256</span>,
+    top=<span class="variable">128</span>,
+    bottom=<span class="variable">0</span>,
+    feather_radius=<span class="variable">16.0</span>,
+    strength=<span class="variable">0.99</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method get">T2V</span>
+<span class="api-title">Text to Video</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.text_to_video(
+    prompt=<span class="string">"a drone flying over a canyon at sunset"</span>,
+    model=<span class="string">"wan_1_3b"</span>,
+    frames=<span class="variable">48</span>,
+    fps=<span class="variable">24</span>,
+    enable_vae_tiling=<span class="variable">False</span>,
+)
+
+<span class="comment"># Output: vid_0001_wan_1_3b_seed42.mp4</span>
+print(result.output_path)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method post">I2V</span>
+<span class="api-title">Image to Video</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+result = pipeline.image_to_video(
+    prompt=<span class="string">"gentle camera zoom, clouds moving"</span>,
+    start_frame=<span class="string">"landscape.png"</span>,
+    end_frame=<span class="variable">None</span>, <span class="comment"># optional for FLF mode</span>
+    frames=<span class="variable">72</span>,
+    fps=<span class="variable">24</span>,
+    model=<span class="string">"ltx2_fp8"</span>,
+)</code></pre>
+</div>
+</div>
+</div>
+</div>
+
+<div class="api-card fade-in">
+<div class="api-header">
+<span class="api-method get">MGT</span>
+<span class="api-title">Model Management</span>
+</div>
+<div class="api-body">
+<div class="code-block">
+<div class="code-header">
+<span class="code-lang">Python</span>
+<button class="code-copy" onclick="copyCode(this)">Copy</button>
+</div>
+<div class="code-content">
+<pre><code><span class="keyword">from</span> genbox <span class="keyword">import</span> pipeline
+
+<span class="comment"># Check installation</span>
+pipeline.is_installed(<span class="string">"flux2_klein"</span>) <span class="comment"># → bool</span>
+
+<span class="comment"># Download model</span>
+pipeline.download(<span class="string">"wan_1_3b"</span>, force=<span class="variable">False</span>)
+
+<span class="comment"># Install defaults for VRAM profile</span>
+installed = pipeline.install_defaults(profile=<span class="string">"12gb_balanced"</span>)
+
+<span class="comment"># List models</span>
+models = pipeline.list_models(model_type=<span class="string">"video"</span>)
+<span class="keyword">for</span> m <span class="keyword">in</span> models:
+    print(f<span class="string">"{m.id}: {m.vram_gb}GB"</span>)</code></pre>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+
+<!-- ===== FOOTER ===== -->
+<footer>
+<div class="footer-inner">
+<div class="footer-grid">
+<div class="footer-brand">
+<h3>genbox</h3>
+<p>Local AI image and video generation. Runs on consumer hardware with 8–24 GB VRAM. No cloud, no subscriptions, complete privacy.</p>
+</div>
+
+<div class="footer-links">
+<h4>Documentation</h4>
+<ul>
+<li><a href="#installation">Installation</a></li>
+<li><a href="#cli">CLI Reference</a></li>
+<li><a href="#api">Python API</a></li>
+<li><a href="#models">Models</a></li>
+<li><a href="#vram">VRAM Profiles</a></li>
+</ul>
+</div>
+
+<div class="footer-links">
+<h4>Resources</h4>
+<ul>
+<li><a href="https://github.com/you/genbox" target="_blank">GitHub</a></li>
+<li><a href="https://github.com/you/genbox/issues" target="_blank">Issues</a></li>
+<li><a href="https://github.com/you/genbox/releases" target="_blank">Releases</a></li>
+<li><a href="https://huggingface.co/models?search=flux" target="_blank">HuggingFace</a></li>
+</ul>
+</div>
+
+<div class="footer-links">
+<h4>Community</h4>
+<ul>
+<li><a href="#" target="_blank">Discord</a></li>
+<li><a href="#" target="_blank">Twitter</a></li>
+<li><a href="#" target="_blank">Reddit</a></li>
+<li><a href="#" target="_blank">Blog</a></li>
+</ul>
+</div>
+</div>
+
+<div class="footer-bottom">
+<span class="footer-copyright">© 2025 genbox. Apache 2.0 License. Model licenses vary.</span>
+<div class="footer-links-inline">
+<a href="#">Privacy</a>
+<a href="#">Terms</a>
+<a href="#">License</a>
+</div>
+</div>
+</div>
+</footer>
+
+<!-- ===== JAVASCRIPT ===== -->
+<script>
+// ===== SCROLL ANIMATIONS =====
+const observerOptions = {
+threshold: 0.1,
+ rootMargin: '0px 0px -50px 0px'
+};
+
+const observer = new IntersectionObserver((entries) => {
+ entries.forEach(entry => {
+ if (entry.isIntersecting) {
+ entry.target.classList.add('visible');
+ }
+ });
+}, observerOptions);
+
+document.querySelectorAll('.fade-in').forEach(el => {
+ observer.observe(el);
+});
+
+// ===== HEADER SCROLL EFFECT =====
+const header = document.getElementById('header');
+
+window.addEventListener('scroll', () => {
+ const currentScroll = window.pageYOffset;
+ if (currentScroll > 50) {
+ header.classList.add('scrolled');
+ } else {
+ header.classList.remove('scrolled');
+ }
+});
+
+// ===== MODEL TABS =====
+const modelTabs = document.querySelectorAll('.models-tab');
+const modelContent = {
+ image: document.getElementById('models-image'),
+ video: document.getElementById('models-video'),
+ all: document.getElementById('models-all')
+};
+
+modelTabs.forEach(tab => {
+ tab.addEventListener('click', () => {
+ const targetTab = tab.dataset.tab;
+ modelTabs.forEach(t => t.classList.remove('active'));
+ tab.classList.add('active');
+ Object.keys(modelContent).forEach(key => {
+ if (modelContent[key]) {
+ modelContent[key].style.display = key === targetTab ? 'grid' : 'none';
+ }
+ });
+ });
+});
+
+// ===== COPY CODE FUNCTION =====
+function copyCode(button) {
+ const codeBlock = button.closest('.code-block');
+ const code = codeBlock.querySelector('code');
+ const text = code.innerText;
+
+ navigator.clipboard.writeText(text).then(() => {
+ const originalText = button.innerText;
+ button.innerText = 'Copied!';
+ button.style.color = 'var(--success)';
+ button.style.borderColor = 'var(--success)';
+
+ setTimeout(() => {
+ button.innerText = originalText;
+ button.style.color = '';
+ button.style.borderColor = '';
+ }, 2000);
+ });
+}
+
+// ===== TERMINAL ANIMATION =====
+const progressText = document.getElementById('progress-text');
+if (progressText) {
+ let progress = 0;
+ const animateProgress = () => {
+ progress += Math.random() * 15;
+ if (progress > 100) progress = 100;
+
+ const filled = Math.floor(progress / 6.25);
+ const empty = 16 - filled;
+ progressText.textContent = '█'.repeat(filled) + '░'.repeat(empty);
+
+ if (progress < 100) {
+ setTimeout(animateProgress, 50);
+ } else {
+ setTimeout(() => {
+ progress = 0;
+ animateProgress();
+ }, 3000);
+ }
+ };
+ setTimeout(animateProgress, 2000);
+}
+
+// ===== MOBILE MENU =====
+const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
+const nav = document.querySelector('nav');
+
+if (mobileMenuBtn && nav) {
+ mobileMenuBtn.addEventListener('click', () => {
+ nav.style.display = nav.style.display === 'flex' ? 'none' : 'flex';
+ nav.style.flexDirection = 'column';
+ nav.style.position = 'absolute';
+ nav.style.top = '100%';
+ nav.style.left = '0';
+ nav.style.right = '0';
+ nav.style.background = 'var(--bg-secondary)';
+ nav.style.padding = '16px';
+ nav.style.borderTop = '1px solid var(--border-color)';
+ });
+}
+
+// ===== TYPING ANIMATION FOR HERO =====
+const heroSubtitle = document.querySelector('.hero-subtitle');
+if (heroSubtitle) {
+ const text = heroSubtitle.innerHTML;
+ heroSubtitle.innerHTML = '';
+ let i = 0;
+
+ const typeWriter = () => {
+ if (i < text.length) {
+ heroSubtitle.innerHTML += text.charAt(i);
+ i++;
+ setTimeout(typeWriter, 10);
+ }
+ };
+ setTimeout(typeWriter, 500);
+}
+
+// ===== COUNTER ANIMATION =====
+const statValues = document.querySelectorAll('.stat-value');
+
+const animateCounter = (el) => {
+ const target = el.innerText;
+ const isNumber = /^[\d.]+/.test(target);
+ if (!isNumber) return;
+
+ const numericPart = parseFloat(target);
+ const suffix = target.replace(/[\d.]+/, '');
+ const duration = 2000;
+ const startTime = performance.now();
+
+ const animate = (currentTime) => {
+ const elapsed = currentTime - startTime;
+ const progress = Math.min(elapsed / duration, 1);
+ const easeOut = 1 - Math.pow(1 - progress, 3);
+ const current = Math.floor(numericPart * easeOut);
+ el.innerText = current + suffix;
+
+ if (progress < 1) {
+ requestAnimationFrame(animate);
+ } else {
+ el.innerText = target;
+ }
+ };
+ requestAnimationFrame(animate);
+};
+
+const statsObserver = new IntersectionObserver((entries) => {
+ entries.forEach(entry => {
+ if (entry.isIntersecting) {
+ statValues.forEach(el => animateCounter(el));
+ statsObserver.disconnect();
+ }
+ });
+}, { threshold: 0.5 });
+
+const statsSection = document.querySelector('.stats-section');
+if (statsSection) {
+ statsObserver.observe(statsSection);
+}
+
+// ===== PARALLAX EFFECT =====
+window.addEventListener('scroll', () => {
+ const scrolled = window.pageYOffset;
+ const hero = document.querySelector('.hero');
+ if (hero && scrolled < window.innerHeight) {
+ hero.style.backgroundPositionY = scrolled * 0.5 + 'px';
+ }
+});
+
+// ===== INIT =====
+console.log('%c genbox ', 'background: #4a9eff; color: #0d0d0d; font-size: 20px; font-weight: bold; padding: 10px;');
+console.log('Local AI Image & Video Generation');
+
+</script>
+</body>
+</html>
