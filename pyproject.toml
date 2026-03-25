@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genbox"
+version = "0.1.0"
+description = "Local AI image + video generation toolkit"
+requires-python = ">=3.10"
+dependencies = [
+    "tomli>=2.0; python_version<'3.11'",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+image = [
+    "torch>=2.3",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "sentencepiece",
+    "bitsandbytes",
+    "peft",
+]
+video = [
+    "torch>=2.3",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "imageio[ffmpeg]",
+    "opencv-python-headless",
+]
+ui = [
+    "streamlit",
+    "streamlit_drawable_canvas",
+]
+all = [
+    "genbox[image,video,ui]",
+]
+
+[project.scripts]
+genbox = "genbox.cli:main"
+
+[tool.setuptools]
+packages = ["genbox"]
+
+[tool.setuptools.package-data]
+genbox = ["py.typed"]
