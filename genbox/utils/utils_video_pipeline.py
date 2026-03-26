@@ -266,8 +266,9 @@ def apply_video_accelerators(
     accel = accel or []
     env_override = env_override or os.environ.get("GENBOX_OFFLOAD", "").lower() or None
     offload_mode = resolve_offload_mode(vram_gb, env_override, has_quantized_encoders)
-    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
     inject_compile(pipe, accel)
+    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
+
 
     if enable_vae_tiling:
         try:

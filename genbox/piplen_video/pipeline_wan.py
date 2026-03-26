@@ -90,28 +90,26 @@ class WanPipelineConfig:
 
 # ── Path resolution ────────────────────────────────────────────────────────────
 
-def _resolve_wan_local_path(entry, models_dir: Union[str, Path]) -> Path:
+def _resolve_wan_local_path(entry, models_dir: Union[str, Path]):
     """
     Resolve local path for a WAN model.
-
-    WAN is always full diffusers-repo format.
-    GGUF is explicitly unsupported (raises ValueError).
-    Raises FileNotFoundError if model not installed.
+    Full diffusers repo  → returns directory (with model_index.json)
+    GGUF single-file     → returns .gguf file path
     """
     models_dir = Path(models_dir)
 
-    if "gguf" in getattr(entry, "quant", "").lower():
-        raise ValueError(
-            f"'{entry.name}' is a GGUF single-file. "
-            "Diffusers-based WAN pipelines do not support GGUF.\n"
-            "Use a full diffusers-format repo: wan_1_3b or wan21_14b_diffusers."
-        )
+    if entry.is_gguf():
+        p = models_dir / "wan" / Path(entry.hf_filename).name
+        if not p.exists():
+            raise FileNotFoundError(
+                f"WAN GGUF not found: {p}\nDownload via Models panel."
+            )
+        return p   # ← Path zur .gguf Datei
 
     p = models_dir / "wan" / entry.id
     if not (p / "model_index.json").exists():
         raise FileNotFoundError(
-            f"WAN model not found: {p}\n"
-            "Download via Models panel."
+            f"WAN model not found: {p}\nDownload via Models panel."
         )
     return p
 
@@ -251,61 +249,143 @@ def build_wan_output_meta(
 
 # ── Pipeline loader ────────────────────────────────────────────────────────────
 
-def load_wan_pipe(
-    entry,
-    models_dir: Union[str, Path],
-    dtype,
-    mode: str = "t2v",
-):
-    """
-    Load a WAN pipeline from local storage.
-
-    VAE is always loaded as float32 (mandatory).
-    I2V additionally loads CLIPVisionModel as float32.
-    Returns a diffusers pipeline (not yet moved to device).
-    """
-    import torch        # type: ignore
-    import diffusers    # type: ignore
+def load_wan_pipe(entry, models_dir, dtype, mode: str = "t2v"):
+    import torch
+    import diffusers
 
     local_path = _resolve_wan_local_path(entry, models_dir)
 
-    # VAE: always float32
+    # ── GGUF: Transformer via from_single_file, Rest vom pipeline_repo ──────
+    if entry.is_gguf():
+        return _load_wan_pipe_gguf(entry, local_path, dtype, mode)
+
+    # ── Full diffusers repo (bisheriger Code) ────────────────────────────────
     vae = diffusers.AutoencoderKLWan.from_pretrained(
-        str(local_path),
+        str(local_path), subfolder="vae",
+        torch_dtype=torch.float32, local_files_only=True,
+    )
+    cls_name  = select_wan_pipeline_class(mode)
+    PipeClass = getattr(diffusers, cls_name)
+
+    if mode == "i2v":
+        from transformers import CLIPVisionModel
+        image_encoder = CLIPVisionModel.from_pretrained(
+            str(local_path), subfolder="image_encoder",
+            torch_dtype=torch.float32, local_files_only=True,
+        )
+        return PipeClass.from_pretrained(
+            str(local_path), vae=vae, image_encoder=image_encoder,
+            torch_dtype=dtype, local_files_only=True,low_cpu_mem_usage=True
+        )
+
+    return PipeClass.from_pretrained(
+        str(local_path), vae=vae,
+        torch_dtype=dtype, local_files_only=True,low_cpu_mem_usage=True
+    )
+
+
+def _load_wan_pipe_gguf(entry, gguf_path: Path, dtype, mode: str):
+    import torch
+    import diffusers
+    from genbox.config import cfg  # für models_dir
+
+    pipeline_repo = entry.hf_pipeline_repo
+    if not pipeline_repo:
+        raise ValueError(
+            f"GGUF entry '{entry.id}' hat kein hf_pipeline_repo. "
+            "Kann VAE/Text-Encoder nicht laden."
+        )
+
+    # Shared config dir — identisch zu _shared_config_dir() in models.py
+    safe = pipeline_repo.replace("/", "--")
+    shared_dir = str(Path(cfg.models_dir) / "wan" / f"_shared_{safe}")
+
+    log.info(f"WAN GGUF: transformer={gguf_path.name}, components={shared_dir}")
+
+    transformer = diffusers.WanTransformer3DModel.from_single_file(
+        str(gguf_path),
+        config=shared_dir,  # ← Config vom passenden T2V-Repo
+        subfolder="transformer",  # ← nicht vom I2V-Pipeline-Config
+        quantization_config=diffusers.GGUFQuantizationConfig(compute_dtype=dtype),
+        torch_dtype=dtype,
+    )
+
+    vae = diffusers.AutoencoderKLWan.from_pretrained(
+        shared_dir,
         subfolder="vae",
         torch_dtype=torch.float32,
-        local_files_only=True,
+        local_files_only=True,   # ← offline
     )
 
     cls_name  = select_wan_pipeline_class(mode)
     PipeClass = getattr(diffusers, cls_name)
 
     if mode == "i2v":
-        # I2V needs CLIPVisionModel (float32)
-        from transformers import CLIPVisionModel  # type: ignore
+        image_encoder_path = Path(shared_dir) / "image_encoder"
+
+        if not image_encoder_path.exists():
+            # Fallback: CLIP aus einem anderen WAN-Shard der bereits image_encoder hat
+            wan_dir = Path(shared_dir).parent  # models_dir/wan/
+            clip_source = None
+            for candidate in wan_dir.glob("_shared_*"):
+                if (candidate / "image_encoder" / "config.json").exists():
+                    clip_source = str(candidate)
+                    log.info(f"CLIP image_encoder nicht in {shared_dir} — "
+                             f"verwende: {candidate.name}")
+                    break
+
+            if clip_source:
+                from transformers import CLIPVisionModel
+                image_encoder = CLIPVisionModel.from_pretrained(
+                    clip_source,
+                    subfolder="image_encoder",
+                    torch_dtype=torch.float32,
+                    local_files_only=True,
+                )
+                return PipeClass.from_pretrained(
+                    shared_dir,
+                    transformer=transformer,
+                    vae=vae,
+                    image_encoder=image_encoder,
+                    torch_dtype=dtype,
+                    local_files_only=True,
+                )
+            else:
+                log.warning(
+                    "Kein image_encoder in shared_dir und kein WAN-Shard mit CLIP gefunden. "
+                    "Lade ohne image_encoder — I2V-Konditionierung nicht verfügbar."
+                )
+                return PipeClass.from_pretrained(
+                    shared_dir,
+                    transformer=transformer,
+                    vae=vae,
+                    torch_dtype=dtype,
+                    local_files_only=True,
+                )
+
+        from transformers import CLIPVisionModel
         image_encoder = CLIPVisionModel.from_pretrained(
-            str(local_path),
+            shared_dir,
             subfolder="image_encoder",
             torch_dtype=torch.float32,
             local_files_only=True,
         )
-        pipe = PipeClass.from_pretrained(
-            str(local_path),
+        return PipeClass.from_pretrained(
+            shared_dir,
+            transformer=transformer,
             vae=vae,
             image_encoder=image_encoder,
             torch_dtype=dtype,
             local_files_only=True,
         )
-    else:
-        pipe = PipeClass.from_pretrained(
-            str(local_path),
-            vae=vae,
-            torch_dtype=dtype,
-            local_files_only=True,
-        )
 
-    return pipe
-
+    return PipeClass.from_pretrained(
+        shared_dir,
+        transformer=transformer,
+        vae=vae,
+        torch_dtype=dtype,
+        local_files_only=True,
+    )
 
 # ── Accelerator entry point ────────────────────────────────────────────────────
 
@@ -326,7 +406,91 @@ def apply_pipeline_accelerators(
     )
 
 
+def _apply_wan_teacache(pipe, accel: list, variant: str) -> None:
+    """
+    TeaCache für WAN — patcht pipe.transformer.forward mit Caching-Logik.
+    Schwellenwert: 0.08 für 1.3B, 0.3 für 14B.
+    Quelle: ali-vilab/TeaCache, TeaCache4Wan2.1
+    """
+    if "teacache" not in [a.lower() for a in accel]:
+        return
+
+    try:
+        import torch
+
+        # Schwellenwert je Modellgröße
+        thresh = 0.08 if "1_3b" in variant or "1.3b" in variant else 0.3
+
+        transformer = pipe.transformer
+        original_forward = transformer.forward
+
+        # State für den Cache
+        cache_state = {
+            "accumulated_rel_l1": 0.0,
+            "prev_hidden": None,
+            "cached_output": None,
+            "step": 0,
+        }
+
+        def cached_forward(hidden_states, *args, **kwargs):
+            if cache_state["prev_hidden"] is not None:
+                # Relative L1 Distanz zum letzten Step
+                diff = (hidden_states - cache_state["prev_hidden"]).abs().mean()
+                norm = cache_state["prev_hidden"].abs().mean() + 1e-8
+                rel_l1 = (diff / norm).item()
+                cache_state["accumulated_rel_l1"] += rel_l1
+
+                if (
+                        cache_state["accumulated_rel_l1"] < thresh
+                        and cache_state["cached_output"] is not None
+                ):
+                    cache_state["step"] += 1
+                    return cache_state["cached_output"]
+
+                cache_state["accumulated_rel_l1"] = 0.0  # reset nach Compute
+
+            cache_state["prev_hidden"] = hidden_states.detach().clone()
+            output = original_forward(hidden_states, *args, **kwargs)
+            cache_state["cached_output"] = output
+            cache_state["step"] += 1
+            return output
+
+        transformer.forward = cached_forward
+        log.info(f"TeaCache enabled (WAN, thresh={thresh})")
+
+    except Exception as e:
+        log.warning(f"TeaCache apply failed: {e}")
+
+
+def _apply_wan_compile(pipe, accel: list) -> None:
+    if "compile" not in [a.lower() for a in accel]:
+        return
+
+    # compile + CPU-offload = inkompatibel (accelerate hooks wrappen mit
+    # torch.compiler.disable → compile crasht). Nur kompilieren wenn
+    # genug VRAM für offload=none vorhanden — User muss GENBOX_OFFLOAD=none setzen.
+    offload_env = os.environ.get("GENBOX_OFFLOAD", "").lower()
+    if offload_env != "none":
+        log.warning(
+            "torch.compile übersprungen — inkompatibel mit CPU-offload. "
+            "Setze GENBOX_OFFLOAD=none um compile zu aktivieren (braucht >16GB VRAM)."
+        )
+        return
+
+    try:
+        import torch
+        pipe.transformer = torch.compile(
+            pipe.transformer,
+            mode="reduce-overhead",
+            fullgraph=False,   # fullgraph=True crasht mit accelerate
+        )
+        log.info("torch.compile applied to WAN transformer")
+    except Exception as e:
+        log.warning(f"torch.compile failed: {e}")
+
+
 # ── Public generation functions ────────────────────────────────────────────────
+
 
 def generate(
     cfg: WanPipelineConfig,
@@ -370,10 +534,14 @@ def generate(
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture="wan")
 
+    _apply_wan_compile(pipe, cfg.accel)
+
     apply_pipeline_accelerators(
         pipe, device=device, vram_gb=vram_gb,
         accel=cfg.accel, enable_vae_tiling=enable_vae_tiling,
     )
+
+    _apply_wan_teacache(pipe, cfg.accel, cfg.model_id)
 
     step_callback = None
     if tracker is not None:

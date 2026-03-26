@@ -115,76 +115,85 @@ def resolve_offload_mode(
     return mode
 
 
-def apply_accelerators(
-    pipe,
-    device: str,
-    offload_mode: str,
-    accel: Optional[list[str]] = None,
-) -> None:
-    """
-    Apply CPU offloading and optional accelerators to pipe in-place.
-
-    offload_mode: "sequential" | "model" | "none"
-    accel:        list of accelerator tags, e.g. ["xformers", "sageAttn", "teacache"]
-
-    Non-CUDA devices always use pipe.to(device) — no offload possible.
-    """
+def apply_accelerators(pipe, device, offload_mode, accel=None):
     accel = accel or []
-
-    # ── CPU device: no offload, just move ────────────────────────────────────
     if device != "cuda":
         pipe.to(device)
+        print("running on", device, "no accelerators")
         return
 
-    # ── CUDA: offload strategy ────────────────────────────────────────────────
     if offload_mode == "sequential":
         pipe.enable_sequential_cpu_offload()
-        log.info("Sequential CPU offload active (max VRAM savings)")
     elif offload_mode == "none":
         pipe.to("cuda")
-        log.info("No CPU offload — pipe fully on CUDA")
-    else:  # "model"
+    else:
         pipe.enable_model_cpu_offload()
-        log.info("Model CPU offload active")
 
-    # ── Optional accelerators ─────────────────────────────────────────────────
+    # ── xformers — nur für U-Net Architekturen (SD1.5, SDXL) ────────────────
     if "xformers" in accel:
-        try:
-            pipe.enable_xformers_memory_efficient_attention()
-            log.info("xformers memory-efficient attention enabled")
-        except Exception as e:
-            log.warning(f"xformers not available: {e}")
+        if hasattr(pipe, "unet"):   # DiTs haben kein .unet → Guard
+            try:
+                pipe.enable_xformers_memory_efficient_attention()
+                log.info("xformers enabled (U-Net)")
+            except Exception as e:
+                log.warning(f"xformers not available: {e}")
+        else:
+            log.debug("xformers skipped — not a U-Net architecture (DiT)")
 
+    # ── SageAttention — wirklich anwenden via set_attn_processor ─────────────
     if "sageAttn" in accel:
         try:
-            from sageattention import sageattn  # type: ignore
-            log.info("SageAttention available (ops registered)")
-        except ImportError:
-            log.warning("sageAttn requested but not installed")
+            from sageattention import sageattn
+            import torch
 
-    # torch.compile is handled via inject_compile (separate accel pass)
-    # teacache, tgate etc. are architecture-specific → pipeline_flux handles them
+            _orig_sdpa = torch.nn.functional.scaled_dot_product_attention
+
+            def _sage_sdpa(query, key, value, attn_mask=None, dropout_p=0.0,
+                           is_causal=False, scale=None, **kwargs):
+                # Nur head_dim 64/128/256 → sageattn, alles andere → original
+                # Kein Reshape: verändert Attention-Semantik und produziert Artefakte
+                if query.shape[-1] in (64, 128, 256):
+                    return sageattn(query, key, value,
+                                    attn_mask=attn_mask, is_causal=is_causal)
+                return _orig_sdpa(query, key, value, attn_mask=attn_mask,
+                                  dropout_p=dropout_p, is_causal=is_causal,
+                                  scale=scale)
+
+            torch.nn.functional.scaled_dot_product_attention = _sage_sdpa
+            log.info("SageAttention: SDPA patched (64/128/256 → sage, Rest → original)")
+        except ImportError:
+            log.warning("sageAttn requested but not installed: pip install sageattention")
+        except Exception as e:
+            log.warning(f"SageAttention apply failed: {e}")
 
 
 def inject_compile(pipe, accel: list[str]):
-    """
-    Apply torch.compile to transformer/unet if 'compile' in accel.
-    Returns pipe.
-    """
     if "compile" not in accel:
         return pipe
+
+    offload_env = os.environ.get("GENBOX_OFFLOAD", "").lower()
+    if offload_env != "none":
+        log.warning(
+            "torch.compile übersprungen — inkompatibel mit CPU-offload. "
+            "Setze GENBOX_OFFLOAD=none."
+        )
+        return pipe
+
     try:
-        import torch  # type: ignore
+        import torch
+        target = None
         if hasattr(pipe, "transformer") and pipe.transformer is not None:
+            target = "transformer"
             pipe.transformer = torch.compile(
-                pipe.transformer, mode="reduce-overhead", fullgraph=True
+                pipe.transformer, mode="reduce-overhead", fullgraph=False,
             )
-            log.info("torch.compile applied to transformer")
         elif hasattr(pipe, "unet") and pipe.unet is not None:
+            target = "unet"
             pipe.unet = torch.compile(
-                pipe.unet, mode="reduce-overhead", fullgraph=True
+                pipe.unet, mode="reduce-overhead", fullgraph=False,
             )
-            log.info("torch.compile applied to unet")
+        if target:
+            log.info(f"torch.compile applied to {target}")
     except Exception as e:
         log.warning(f"torch.compile failed: {e}")
     return pipe

@@ -490,8 +490,9 @@ def screen_generate():
         default_accels = cfg.active_accels if cfg else []
         use_sage = st.checkbox("SageAttention2++", value="sageAttn" in default_accels, key="use_sage")
         use_tea  = st.checkbox("TeaCache",          value="teacache"  in default_accels, key="use_tea")
+        use_xformers  = st.checkbox("xformers Only for sdl1.5 and xl type",          value="xformers"  in default_accels, key="use_xformers")
         use_comp = st.checkbox("torch.compile",     value="compile"   in default_accels, key="use_comp")
-        accel = (["sageAttn"] if use_sage else []) + (["teacache"] if use_tea else []) + (["compile"] if use_comp else [])
+        accel = (["sageAttn"] if use_sage else []) + (["teacache"] if use_tea else []) + (["compile"] if use_comp else [])+ (["xformers"] if use_xformers else [])
 
         # ── output ────────────────────────────────────────────────────────────
         st.markdown('<div class="section-label">Output</div>', unsafe_allow_html=True)
@@ -662,8 +663,9 @@ def screen_generate():
                     kwargs.update(
                         width=w, height=h, frames=n_frames,
                         fps=vid_fps, negative_prompt=neg_prompt,
-                        enable_noise_meter=True,
+                        enable_noise_meter=kwargs.pop("enable_preview"),
                     )
+                    kwargs.pop("preview_interval")
                     return pipeline.text_to_video(**kwargs)
 
                 elif pipe_type == "Image → Video":
@@ -673,8 +675,9 @@ def screen_generate():
                         start_frame=input_path, end_frame=end_path,
                         width=w, height=h, frames=n_frames,
                         fps=vid_fps, negative_prompt=neg_prompt,
-                        enable_noise_meter=True,
+                        enable_noise_meter=kwargs.pop("enable_preview"),
                     )
+                    kwargs.pop("preview_interval")
                     return pipeline.image_to_video(**kwargs)
 
                 raise ValueError(f"Unknown pipeline type: {pipe_type}")
@@ -1116,6 +1119,43 @@ def screen_models():
                             except Exception as ex:
                                 _l2(str(ex), "err")
 
+                # Healing: detect missing VAE weights in shared config
+                if shared_ok and e.hf_pipeline_repo:
+                    vae_dir = shared_dir / "vae"
+                    vae_has_weights = vae_dir.exists() and any(
+                        (vae_dir / f).exists()
+                        for f in ("diffusion_pytorch_model.bin",
+                                  "diffusion_pytorch_model.safetensors")
+                    )
+                    if not vae_has_weights:
+                        st.markdown(
+                            '<span style="font-size:10px;color:#ff6b35;">'
+                            '⚠ VAE weights missing — generation will fail</span>',
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("🔧 Heal: download missing weights",
+                                     key=f"heal_{e.id}_{i}"):
+                            if cfg is None:
+                                st.error("Run genbox setup first.")
+                            else:
+                                log_ph = st.empty()
+                                log_lines: list[str] = []
+
+                                def _lh(msg, kind=""):
+                                    log_lines.append(_logline(msg, kind))
+                                    log_ph.markdown(
+                                        f'<div class="logcat">{"".join(log_lines)}</div>',
+                                        unsafe_allow_html=True,
+                                    )
+
+                                with st.spinner("Healing …"):
+                                    try:
+                                        model_lib.heal_model(e)
+                                        _lh("✓ Heal complete", "ok")
+                                        st.rerun()
+                                    except Exception as ex:
+                                        _lh(str(ex), "err")
+
         # ── HF search ──────────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("### Search HuggingFace")
@@ -1163,7 +1203,8 @@ def screen_models():
                                           "stabilityai/stable-diffusion-xl-base-1.0",
                                           "runwayml/stable-diffusion-v1-5",
                                           "Lightricks/LTX-Video",
-                                          "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"],
+                                          "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+                                          "Wan-AI/Wan2.1-T2V-14B-Diffusers"],
                                          key=f"base_{repo}")
 
                 if st.button("↓ Download", key=f"dl_hf_{repo.replace('/','__')}"):
@@ -1197,8 +1238,11 @@ def screen_models():
                                         _hfl(f"Caching shared config: {base_repo} …", "accent")
                                         snapshot_download(repo_id=base_repo, local_dir=str(cfg_dir),
                                                           local_dir_use_symlinks=False, token=token,
-                                                          ignore_patterns=["*.gguf","*.safetensors","*.bin",
-                                                                           "*.pt","*.ot","*.msgpack","*.h5","flax_*"])
+                                                          ignore_patterns=["*.gguf",
+                                                                           "transformer/*.safetensors",
+                                                                           "transformer/*.bin",
+                                                                           "*.pt", "*.ot", "*.msgpack", "*.h5",
+                                                                           "flax_*"])
                                         _hfl("Shared config cached ✓", "ok")
                                     model_lib.reset_discovery()
                                     st.success("Done!")

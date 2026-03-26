@@ -223,12 +223,9 @@ def load_sdl_pipe(entry, models_dir: Union[str, Path], dtype):
     local_path, is_single_file = _resolve_sdl_local_path(entry, models_dir)
     cls_name   = _select_sdl_pipeline_class(entry.architecture)
     PipeClass  = getattr(diffusers, cls_name)
-
-    load_kwargs: dict = dict(torch_dtype=dtype, local_files_only=True)
-
     if not is_single_file:
-        # ── Full-repo (from_pretrained) ─────────────────────────────────────
-        load_kwargs["safety_checker"] = None
+        load_kwargs: dict = dict(torch_dtype=dtype, local_files_only=True,
+                                 safety_checker=None)
         if entry.architecture == "sdxl":
             load_kwargs["use_safetensors"] = True
             import torch as _torch
@@ -236,9 +233,9 @@ def load_sdl_pipe(entry, models_dir: Union[str, Path], dtype):
                 load_kwargs["variant"] = "fp16"
         pipe = PipeClass.from_pretrained(str(local_path), **load_kwargs)
     else:
-        # ── Single-file: custom .safetensors oder .ckpt ─────────────────────
-        # from_single_file enthält den kompletten SDL-Checkpoint (kein Transformer-Swap nötig).
-        # safety_checker und variant werden nicht übergeben — from_single_file ignoriert sie.
+        # from_single_file braucht Netzwerk für CLIP/tokenizer-Configs
+        # local_files_only=True blockiert das → weglassen
+        load_kwargs: dict = dict(torch_dtype=dtype)
         log.info(f"Custom single-file: {local_path.name} (arch={entry.architecture})")
         pipe = PipeClass.from_single_file(str(local_path), **load_kwargs)
 
@@ -265,8 +262,9 @@ def apply_pipeline_accelerators(
     accel = accel or []
     env_override = env_override or os.environ.get("GENBOX_OFFLOAD", "").lower() or None
     offload_mode = resolve_offload_mode(vram_gb, env_override, has_quantized_encoders)
-    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
     inject_compile(pipe, accel)
+    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
+
 
 
 # ── Public generation function ─────────────────────────────────────────────────

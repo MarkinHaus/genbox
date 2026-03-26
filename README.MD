@@ -598,6 +598,16 @@ GENBOX_OFFLOAD=sequential genbox gen -p "…"   # sequential CPU offload
 GENBOX_SLOW_TESTS=1       python -m unittest tests.test_cli
 ```
 
+
+Windows Pagefile erhöhen (dauerhaft)
+Win+R → sysdm.cpl → Erweitert → Leistung → Einstellungen → Erweitert → Virtueller Arbeitsspeicher → Ändern:
+
+Keine automatische Verwaltung
+Laufwerk C: → Benutzerdefiniert
+Anfangsgröße: 16384 MB
+Maximalgröße: 32768 MB
+Festlegen → OK → Neustart
+
 ---
 
 ## License

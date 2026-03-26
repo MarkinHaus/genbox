@@ -191,6 +191,46 @@ def _detect_flux_classes_from_repo(local_repo: Path) -> tuple[str, str]:
 
 # ── Pipeline loader ────────────────────────────────────────────────────────────
 
+def _load_flux_transformer_single_file(
+    path: Path,
+    TransformerClass,
+    transformer_config_dir: str,
+    dtype,
+):
+    """
+    Load Flux transformer from .safetensors.
+    Bypasses from_single_file entirely — handles any key prefix generically.
+    """
+    import safetensors.torch as st
+
+    state_dict = st.load_file(str(path))
+
+    # Generic prefix detection: find prefix before first 'double_blocks.' occurrence
+    prefix = ""
+    for k in state_dict:
+        if "double_blocks." in k:
+            idx = k.index("double_blocks.")
+            if idx > 0:
+                prefix = k[:idx]
+            break
+
+    if prefix:
+        log.info(f"Stripping key prefix '{prefix}' for diffusers compat")
+        state_dict = {
+            (k[len(prefix):] if k.startswith(prefix) else k): v
+            for k, v in state_dict.items()
+        }
+
+    transformer = TransformerClass.from_config(
+        transformer_config_dir, torch_dtype=dtype
+    )
+    missing, unexpected = transformer.load_state_dict(state_dict, strict=False)
+    if missing:
+        log.warning(f"Missing keys ({len(missing)}): {missing[:3]}")
+    if unexpected:
+        log.warning(f"Unexpected keys ({len(unexpected)}): {unexpected[:3]}")
+    return transformer
+
 def load_flux_pipe(entry, models_dir: Union[str, Path], dtype, t5_mode: str = "fp16"):
     """
     Load a FLUX pipeline (FLUX.1 or FLUX.2) from local storage.
@@ -222,7 +262,6 @@ def load_flux_pipe(entry, models_dir: Union[str, Path], dtype, t5_mode: str = "f
                 f"Expected: {shared_config}\n"
                 "Download via Models → 'Download Shared Config'."
             )
-        transformer_config_dir = str(shared_config / "transformer")
         try:
             import gguf  # noqa
         except ImportError:
@@ -230,7 +269,8 @@ def load_flux_pipe(entry, models_dir: Union[str, Path], dtype, t5_mode: str = "f
 
         transformer = TransformerClass.from_single_file(
             str(local_path),
-            config=transformer_config_dir,
+            config=str(shared_config),  # ← Parent-Dir
+            subfolder="transformer",  # ← Subfolder separat
             quantization_config=diffusers.GGUFQuantizationConfig(compute_dtype=dtype),
             torch_dtype=dtype,
             local_files_only=True,
@@ -268,11 +308,11 @@ def load_flux_pipe(entry, models_dir: Union[str, Path], dtype, t5_mode: str = "f
                 "its shared config via Models → 'Download Shared Config'."
             )
         transformer_config_dir = str(shared_config / "transformer")
-        transformer = TransformerClass.from_single_file(
-            str(local_path),
-            config=transformer_config_dir,
-            torch_dtype=dtype,
-            local_files_only=True,
+        transformer = _load_flux_transformer_single_file(
+            local_path,
+            TransformerClass,
+            transformer_config_dir,
+            dtype,
         )
         log.info(f"Custom safetensors loaded: {local_path.name} (base: {shared_config.name})")
         t5_kw = build_t5_kwargs(shared_config, t5_mode, is_flux2, dtype)
@@ -311,8 +351,9 @@ def apply_pipeline_accelerators(
     accel = accel or []
     env_override = env_override or os.environ.get("GENBOX_OFFLOAD", "").lower() or None
     offload_mode = resolve_offload_mode(vram_gb, env_override, has_quantized_encoders)
-    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
     inject_compile(pipe, accel)
+    apply_accelerators(pipe, device=device, offload_mode=offload_mode, accel=accel)
+
 
 
 # ── Public generation function ─────────────────────────────────────────────────

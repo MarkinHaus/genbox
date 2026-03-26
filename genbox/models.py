@@ -290,6 +290,28 @@ REGISTRY: dict[str, ModelEntry] = {
         notes="LTX-2: joint audio-visual. 2-stage (base + upscaler). 14GB+ VRAM.",
     ),
 
+    "ltxv_097_dev": ModelEntry(
+        id="ltxv_097_dev", name="LTX-Video 0.9.7-dev 13B",
+        type="video", architecture="ltx", vram_min_gb=12,
+        hf_repo="Lightricks/LTX-Video-0.9.7-dev",
+        hf_filename="model_index.json", license="LightricksResearch",
+        quant="bf16", quality_stars=5, speed_stars=4, full_repo=True,
+        tags=["text2video", "img2video", "13b", "condition-pipeline"],
+        notes="Base 0.9.7 dev 13B. LTXConditionPipeline. Pair with "
+              "ltxv-spatial-upscaler-0.9.7 for full quality. 12GB+ VRAM.",
+    ),
+
+    "ltxv_098_distilled": ModelEntry(
+        id="ltxv_098_distilled", name="LTX-Video 0.9.8-distilled 13B",
+        type="video", architecture="ltx", vram_min_gb=12,
+        hf_repo="Lightricks/LTX-Video-0.9.8-13B-distilled",
+        hf_filename="model_index.json", license="LightricksResearch",
+        quant="bf16", quality_stars=5, speed_stars=5, full_repo=True,
+        tags=["text2video", "img2video", "13b", "distilled", "8-step", "30fps"],
+        notes="0.9.8 distilled. 8 steps @ 1216×704 30fps. No CFG needed. "
+              "Mix mit 0.9.8-dev im multiscale workflow. 12GB+ VRAM.",
+    ),
+
     # ══════════════════════════════════════════════════════════════════════════
     # VIDEO — WAN 2.1 T2V
     # ══════════════════════════════════════════════════════════════════════════
@@ -345,6 +367,32 @@ REGISTRY: dict[str, ModelEntry] = {
         notes="First+Last-Frame conditioning. Set both start and end frame for interpolation.",
         supports_i2v=True, video_mode="flf2v",
     ),
+    "wan21_i2v_480p_q4km_gguf": ModelEntry(
+        id="wan21_i2v_480p_q4km_gguf",
+        name="WAN 2.1 I2V-14B 480P Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=13,
+        hf_repo="city96/Wan2.1-I2V-14B-480P-gguf",
+        hf_filename="wan2.1-i2v-14b-480p-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=4, full_repo=False,
+        tags=["img2video", "i2v", "gguf", "14b", "480p"],
+        notes="city96 Q4_K_M. 11.3 GB. VAE+CLIP vom pipeline_repo. 13GB VRAM.",
+        supports_i2v=True, video_mode="i2v",
+    ),
+    "wan21_i2v_720p_q4km_gguf": ModelEntry(
+        id="wan21_i2v_720p_q4km_gguf",
+        name="WAN 2.1 I2V-14B 720P Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=16,
+        hf_repo="city96/Wan2.1-I2V-14B-720P-gguf",
+        hf_filename="wan2.1-i2v-14b-720p-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-I2V-14B-720P-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=3, full_repo=False,
+        tags=["img2video", "i2v", "gguf", "14b", "720p"],
+        notes="city96 Q4_K_M. 11.3 GB. 720P braucht mehr VRAM. 16GB+ empfohlen.",
+        supports_i2v=True, video_mode="i2v",
+    ),
 
     # ══════════════════════════════════════════════════════════════════════════
     # VIDEO — WAN 2.2
@@ -378,6 +426,156 @@ REGISTRY: dict[str, ModelEntry] = {
         notes="TI2V 5B — T2V + I2V in one model. 720P@24fps. Runs on 4090 (12GB).",
         supports_i2v=True, video_mode="ti2v",
     ),
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # VIDEO — WAN 2.1 GGUF (city96) — ComfyUI-GGUF only, kein Diffusers!
+    # Pipeline: ComfyUI-GGUF node / WanVideoWrapper, NICHT genbox Diffusers
+    # VAE separat: Kijai/WanVideo_comfy → wan_2.1_vae.safetensors
+    # ══════════════════════════════════════════════════════════════════════════
+    "wan21_t2v_1_3b_q4_gguf": ModelEntry(
+        id="wan21_t2v_1_3b_q4_gguf",
+        name="WAN 2.1 T2V-1.3B Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=4,
+        hf_repo="samuelchristlie/Wan2.1-T2V-1.3B-GGUF",
+        hf_filename="wan2.1-t2v-1.3b-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=3, speed_stars=5, full_repo=False,
+        tags=["text2video", "gguf", "1.3b", "low-vram", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only — kein Diffusers-Support. "
+              "VAE separat: wan_2.1_vae.safetensors. ~983 MB. 4GB VRAM.",
+    ),
+    "wan21_t2v_1_3b_q8_gguf": ModelEntry(
+        id="wan21_t2v_1_3b_q8_gguf",
+        name="WAN 2.1 T2V-1.3B Q8_0 (GGUF)",
+        type="video", architecture="wan", vram_min_gb=6,
+        hf_repo="samuelchristlie/Wan2.1-T2V-1.3B-GGUF",
+        hf_filename="wan2.1-t2v-1.3b-Q8_0.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q8", quality_stars=4, speed_stars=5, full_repo=False,
+        tags=["text2video", "gguf", "1.3b", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only — kein Diffusers-Support. ~1.54 GB. 6GB VRAM.",
+    ),
+    "wan21_t2v_14b_q4_gguf": ModelEntry(
+        id="wan21_t2v_14b_q4_gguf",
+        name="WAN 2.1 T2V-14B Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=12,
+        hf_repo="city96/Wan2.1-T2V-14B-gguf",
+        hf_filename="wan2.1-t2v-14b-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-T2V-14B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=4, speed_stars=4, full_repo=False,
+        tags=["text2video", "gguf", "14b", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only — kein Diffusers-Support. "
+              "~10.1 GB. VAE: wan_2.1_vae.safetensors. 12GB VRAM.",
+    ),
+    "wan21_t2v_14b_q8_gguf": ModelEntry(
+        id="wan21_t2v_14b_q8_gguf",
+        name="WAN 2.1 T2V-14B Q8_0 (GGUF)",
+        type="video", architecture="wan", vram_min_gb=18,
+        hf_repo="city96/Wan2.1-T2V-14B-gguf",
+        hf_filename="wan2.1-t2v-14b-Q8_0.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-T2V-14B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q8", quality_stars=5, speed_stars=3, full_repo=False,
+        tags=["text2video", "gguf", "14b", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only — kein Diffusers-Support. ~15.9 GB. 18GB VRAM.",
+    ),
+    "wan21_i2v_480p_q4_gguf": ModelEntry(
+        id="wan21_i2v_480p_q4_gguf",
+        name="WAN 2.1 I2V-14B 480P Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=12,
+        hf_repo="city96/Wan2.1-I2V-14B-480P-gguf",
+        hf_filename="wan2.1-i2v-14b-480p-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=4, speed_stars=4, full_repo=False,
+        tags=["img2video", "i2v", "gguf", "14b", "480p", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. I2V 480P. ~9.2 GB. 12GB VRAM.",
+        supports_i2v=True, video_mode="i2v",
+    ),
+    "wan21_i2v_720p_q4_gguf": ModelEntry(
+        id="wan21_i2v_720p_q4_gguf",
+        name="WAN 2.1 I2V-14B 720P Q4_K_M (GGUF)",
+        type="video", architecture="wan", vram_min_gb=14,
+        hf_repo="city96/Wan2.1-I2V-14B-720P-gguf",
+        hf_filename="wan2.1-i2v-14b-720p-Q4_K_M.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.1-I2V-14B-720P-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=3, full_repo=False,
+        tags=["img2video", "i2v", "gguf", "14b", "720p", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. I2V 720P. ~9.2 GB. 14GB VRAM.",
+        supports_i2v=True, video_mode="i2v",
+    ),
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # VIDEO — WAN 2.2 GGUF (QuantStack) — ComfyUI-GGUF only, kein Diffusers!
+    # QuantStack ist der Haupt-Provider für WAN 2.2 GGUFs (Unsloth hat keine)
+    # ══════════════════════════════════════════════════════════════════════════
+    "wan22_t2v_a14b_q4_gguf": ModelEntry(
+        id="wan22_t2v_a14b_q4_gguf",
+        name="WAN 2.2 T2V-A14B Q4_K_S (GGUF)",
+        type="video", architecture="wan", vram_min_gb=12,
+        hf_repo="QuantStack/Wan2.2-T2V-A14B-GGUF",
+        hf_filename="Wan2.2-T2V-A14B-Q4_K_S.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=4, full_repo=False,
+        tags=["text2video", "gguf", "moe", "a14b", "720p", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. MoE 2×14B, nur 14B aktiv. ~8.75 GB. 12GB VRAM.",
+    ),
+    "wan22_t2v_a14b_q8_gguf": ModelEntry(
+        id="wan22_t2v_a14b_q8_gguf",
+        name="WAN 2.2 T2V-A14B Q8_0 (GGUF)",
+        type="video", architecture="wan", vram_min_gb=18,
+        hf_repo="QuantStack/Wan2.2-T2V-A14B-GGUF",
+        hf_filename="Wan2.2-T2V-A14B-Q8_0.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q8", quality_stars=5, speed_stars=3, full_repo=False,
+        tags=["text2video", "gguf", "moe", "a14b", "720p", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. MoE 2×14B. ~15.4 GB. 18GB VRAM.",
+    ),
+    "wan22_i2v_a14b_q4_gguf": ModelEntry(
+        id="wan22_i2v_a14b_q4_gguf",
+        name="WAN 2.2 I2V-A14B Q4_K_S (GGUF)",
+        type="video", architecture="wan", vram_min_gb=12,
+        hf_repo="QuantStack/Wan2.2-I2V-A14B-GGUF",
+        hf_filename="Wan2.2-I2V-A14B-Q4_K_S.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=4, full_repo=False,
+        tags=["img2video", "i2v", "gguf", "moe", "a14b", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. I2V MoE 480P+720P. ~8.75 GB. 12GB VRAM.",
+        supports_i2v=True, video_mode="i2v",
+    ),
+    "wan22_ti2v_5b_q4_gguf": ModelEntry(
+        id="wan22_ti2v_5b_q4_gguf",
+        name="WAN 2.2 TI2V-5B Q4_K_S (GGUF)",
+        type="video", architecture="wan", vram_min_gb=6,
+        hf_repo="QuantStack/Wan2.2-TI2V-5B-GGUF",
+        hf_filename="Wan2.2-TI2V-5B-Q4_K_S.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q4", quality_stars=5, speed_stars=5, full_repo=False,
+        tags=["img2video", "ti2v", "gguf", "5b", "720p", "consumer", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. T2V+I2V 720P@24fps. ~3.12 GB. 6GB VRAM.",
+        supports_i2v=True, video_mode="ti2v",
+    ),
+    "wan22_ti2v_5b_q8_gguf": ModelEntry(
+        id="wan22_ti2v_5b_q8_gguf",
+        name="WAN 2.2 TI2V-5B Q8_0 (GGUF)",
+        type="video", architecture="wan", vram_min_gb=8,
+        hf_repo="QuantStack/Wan2.2-TI2V-5B-GGUF",
+        hf_filename="Wan2.2-TI2V-5B-Q8_0.gguf",
+        hf_pipeline_repo="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        license="Apache 2.0",
+        quant="gguf-q8", quality_stars=5, speed_stars=4, full_repo=False,
+        tags=["img2video", "ti2v", "gguf", "5b", "720p", "comfyui"],
+        notes="⚠ ComfyUI-GGUF only. T2V+I2V 720P. ~5.4 GB. 8GB VRAM.",
+        supports_i2v=True, video_mode="ti2v",
+    ),
 }
 
 
@@ -402,6 +600,7 @@ DEFAULT_MODELS: dict[str, list[str]] = {
         "sd15_base",             # image — SD1.5 for LoRA compat
         "ltx2_fp8",              # video — classic
         "ltx23_fp8",             # video — distilled 13B
+        "ltxv_098_distilled",
         "wan_1_3b",              # video — T2V 1.3B
     ],
     "16gb_high": [
@@ -517,6 +716,28 @@ def _guess_pipe_repo(arch: str, filename: str) -> str:
         return "black-forest-labs/FLUX.1-schnell"
     if arch == "sd35":
         return "stabilityai/stable-diffusion-3.5-medium"
+    if arch in ("wan", "ltx"):
+        fn = filename.lower()
+        if arch == "wan":
+            if "2.2" in fn or "wan2.2" in fn:
+                if "i2v" in fn:
+                    return "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+                if "ti2v" in fn or "5b" in fn:
+                    return "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+                return "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+            # WAN 2.1 fallback
+            if "i2v" in fn and "720" in fn:
+                return "Wan-AI/Wan2.1-I2V-14B-720P-Diffusers"
+            if "i2v" in fn:
+                return "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"
+            if "1.3b" in fn or "1_3b" in fn:
+                return "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
+            return "Wan-AI/Wan2.1-T2V-14B-Diffusers"
+        print(
+            f"No shared pipeline repo for '{arch}' GGUF '{filename}'. "
+            "WAN/LTX require full diffusers repos, not single GGUF files."
+        )
+        return ""
     return ""
 
 
@@ -564,6 +785,10 @@ def _is_installed_entry(entry: ModelEntry) -> bool:
     fname = Path(entry.hf_filename).name
     if not (arch_dir / fname).exists():
         return False
+
+    if entry.is_gguf() and entry.type == "video":
+        fname = Path(entry.hf_filename).name
+        return (cfg.models_dir / entry.architecture / fname).exists()
 
     # GGUF image models also need a shared config dir
     if entry.is_gguf() and entry.type == "image":
@@ -784,13 +1009,39 @@ def download_model(entry: ModelEntry, dest_dir: Optional[Path] = None) -> Path:
                 local_dir_use_symlinks=False,
                 token=token,
                 ignore_patterns=[
-                    "*.gguf", "*.safetensors", "*.bin",
+                    "*.gguf",
+                    "transformer/*.safetensors",
+                    "transformer/*.bin",
                     "*.pt", "*.ot", "*.msgpack", "*.h5", "flax_*",
                 ],
             )
             Log.ok(f"Config cached: {shared_dir}")
         except Exception as e:
             Log.err(f"Config cache failed (offline generation not possible): {e}")
+            raise
+
+    # ── GGUF video models: download VAE + text_encoder + scheduler ─────────────
+    if entry.is_gguf() and entry.type == "video" and entry.hf_pipeline_repo:
+        from huggingface_hub import snapshot_download
+        shared_dir = _shared_config_dir(entry)
+        Log.info(f"Caching WAN pipeline components: {entry.hf_pipeline_repo}")
+        Log.info(f"  to: {shared_dir}")
+        try:
+            snapshot_download(
+                repo_id=entry.hf_pipeline_repo,
+                local_dir=str(shared_dir),
+                local_dir_use_symlinks=False,
+                token=token,
+                ignore_patterns=[
+                    "*.gguf",
+                    "transformer/*.safetensors",
+                    "transformer/*.bin",
+                    "*.pt", "*.ot", "*.msgpack", "*.h5", "flax_*",
+                ],
+            )
+            Log.ok(f"WAN components cached: {shared_dir}")
+        except Exception as e:
+            Log.err(f"WAN component cache failed (offline generation not possible): {e}")
             raise
 
     reset_discovery()
@@ -839,6 +1090,52 @@ def install_defaults(
 
     return installed
 
+def heal_model(entry: ModelEntry) -> None:
+    """
+    Re-download missing .bin / .safetensors in the shared pipeline config.
+    Idempotent — überspringt bereits vorhandene Dateien.
+    """
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    if cfg is None:
+        raise RuntimeError("genbox not configured — run `genbox setup` first.")
+
+    shared_dir = _shared_config_dir(entry)
+    if not shared_dir or not shared_dir.exists():
+        raise FileNotFoundError(
+            f"Shared config dir not found: {shared_dir}\n"
+            "Download base config first."
+        )
+
+    token = _hf_token() or None
+    repo  = entry.hf_pipeline_repo
+    Log.info(f"Healing: scanning {repo} …")
+
+    weight_exts = {".bin", ".safetensors"}
+    all_files   = list(list_repo_files(repo, token=token))
+    missing     = [
+        f for f in all_files
+        if Path(f).suffix in weight_exts
+        and not (shared_dir / f).exists()
+    ]
+
+    if not missing:
+        Log.ok(f"Nothing to heal — {shared_dir.name} is complete.")
+        return
+
+    Log.info(f"Missing {len(missing)} file(s): {[Path(f).name for f in missing]}")
+    for f in missing:
+        Log.info(f"  ↓ {f}")
+        (shared_dir / Path(f).parent).mkdir(parents=True, exist_ok=True)
+        hf_hub_download(
+            repo_id=repo,
+            filename=f,
+            token=token,
+            local_dir=str(shared_dir),
+            local_dir_use_symlinks=False,
+        )
+    Log.ok(f"Heal complete: {shared_dir.name}")
+    reset_discovery()
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 

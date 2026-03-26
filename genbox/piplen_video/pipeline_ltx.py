@@ -98,15 +98,20 @@ class LtxPipelineConfig:
 # ── Path resolution ────────────────────────────────────────────────────────────
 
 def _resolve_ltx_local_path(entry, models_dir: Union[str, Path]) -> Path:
-    """
-    Resolve local path for an LTX model (always full diffusers-repo).
-    Raises FileNotFoundError if model not installed.
-    """
-    p = Path(models_dir) / "ltx" / entry.id
+    models_dir = Path(models_dir)
+
+    if entry.is_gguf():
+        p = models_dir / "ltx" / Path(entry.hf_filename).name
+        if not p.exists():
+            raise FileNotFoundError(
+                f"LTX GGUF not found: {p}\nDownload via Models panel."
+            )
+        return p
+
+    p = models_dir / "ltx" / entry.id
     if not (p / "model_index.json").exists():
         raise FileNotFoundError(
-            f"LTX model not found: {p}\n"
-            "Download via Models panel."
+            f"LTX model not found: {p}\nDownload via Models panel."
         )
     return p
 
@@ -210,34 +215,23 @@ def build_ltx_output_meta(
 
 # ── Pipeline loader ────────────────────────────────────────────────────────────
 
-def load_ltx_pipe(
-    entry,
-    models_dir: Union[str, Path],
-    dtype,
-    variant: str,
-    mode: str = "t2v",
-):
-    """
-    Load an LTX pipeline from local storage.
-
-    classic:       LTXPipeline / LTXImageToVideoPipeline
-    distilled_13b: LTXConditionPipeline (single pipeline handles both T2V and I2V)
-    ltx2:          LTX2Pipeline / LTX2ImageToVideoPipeline
-
-    Returns a diffusers pipeline (not yet moved to device).
-    """
-    import diffusers  # type: ignore
+def load_ltx_pipe(entry, models_dir, dtype, variant: str, mode: str = "t2v"):
+    import diffusers
 
     local_path = _resolve_ltx_local_path(entry, models_dir)
-    cls_name   = select_ltx_pipeline_class(variant, mode)
 
-    # LTX-2 uses a subpackage — try standard path first
+    # ── GGUF: Transformer via from_single_file, Rest vom pipeline_repo ──────
+    if entry.is_gguf():
+        return _load_ltx_pipe_gguf(entry, local_path, dtype, variant, mode)
+
+    # ── Full diffusers repo (bisheriger Code) ────────────────────────────────
+    cls_name = select_ltx_pipeline_class(variant, mode)
+
     if variant == "ltx2":
         try:
-            from diffusers.pipelines.ltx2 import LTX2Pipeline, LTX2ImageToVideoPipeline  # type: ignore
+            from diffusers.pipelines.ltx2 import LTX2Pipeline, LTX2ImageToVideoPipeline
             PipeClass = LTX2ImageToVideoPipeline if mode == "i2v" else LTX2Pipeline
         except ImportError:
-            # Fallback if ltx2 subpackage not yet in installed diffusers version
             PipeClass = getattr(diffusers, cls_name, None)
             if PipeClass is None:
                 raise ImportError(
@@ -248,24 +242,68 @@ def load_ltx_pipe(
         PipeClass = getattr(diffusers, cls_name, None)
         if PipeClass is None:
             raise ImportError(
-                f"diffusers class {cls_name!r} not found — update diffusers: pip install -U diffusers"
+                f"diffusers class {cls_name!r} not found — update diffusers"
             )
 
     pipe = PipeClass.from_pretrained(
-        str(local_path),
-        torch_dtype=dtype,
-        local_files_only=True,
+        str(local_path), torch_dtype=dtype, local_files_only=True,
     )
-
-    # Enable VAE tiling by default for memory efficiency (best-effort)
     try:
         pipe.vae.enable_tiling()
         log.info("LTX VAE tiling enabled")
     except Exception:
         pass
-
     return pipe
 
+
+def _load_ltx_pipe_gguf(entry, gguf_path: Path, dtype, variant: str, mode: str):
+    """
+    LTX GGUF hybrid loader:
+      - Transformer: LTXVideoTransformer3DModel.from_single_file(gguf) + GGUFQuantizationConfig
+      - Rest:        from_pretrained(shared_dir, local_files_only=True)
+
+    Benötigt: entry.hf_pipeline_repo (z.B. "Lightricks/LTX-Video-0.9.7-distilled")
+    """
+    import diffusers
+    from genbox.config import cfg
+
+    pipeline_repo = entry.hf_pipeline_repo
+    if not pipeline_repo:
+        raise ValueError(
+            f"GGUF entry '{entry.id}' hat kein hf_pipeline_repo. "
+            "Kann VAE/Text-Encoder nicht laden."
+        )
+
+    safe       = pipeline_repo.replace("/", "--")
+    shared_dir = str(Path(cfg.models_dir) / "ltx" / f"_shared_{safe}")
+
+    log.info(f"LTX GGUF: transformer={gguf_path.name}, components={shared_dir}")
+
+    transformer = diffusers.LTXVideoTransformer3DModel.from_single_file(
+        str(gguf_path),
+        quantization_config=diffusers.GGUFQuantizationConfig(compute_dtype=dtype),
+        torch_dtype=dtype,
+    )
+
+    cls_name  = select_ltx_pipeline_class(variant, mode)
+    PipeClass = getattr(diffusers, cls_name, None)
+    if PipeClass is None:
+        raise ImportError(f"diffusers class {cls_name!r} not found — update diffusers")
+
+    pipe = PipeClass.from_pretrained(
+        shared_dir,
+        transformer=transformer,
+        torch_dtype=dtype,
+        local_files_only=True,
+    )
+
+    try:
+        pipe.vae.enable_tiling()
+        log.info("LTX GGUF VAE tiling enabled")
+    except Exception:
+        pass
+
+    return pipe
 
 # ── Accelerator entry point ────────────────────────────────────────────────────
 
@@ -285,6 +323,77 @@ def apply_pipeline_accelerators(
         env_override=env_override,
     )
 
+def _apply_ltx_teacache(pipe, accel: list) -> None:
+    """
+    TeaCache für LTX-Video — nur wenn "teacache" in accel (UI-Checkbox).
+    thresh=0.03 → lossless, thresh=0.05 → ~1.7x speedup (empfohlen).
+    Quelle: ali-vilab/TeaCache, LTX-Video support seit 2024-12-30.
+    """
+    if "teacache" not in [a.lower() for a in accel]:
+        return
+
+    try:
+        import torch
+
+        thresh     = 0.05
+        transformer = pipe.transformer
+        original_forward = transformer.forward
+
+        cache_state = {
+            "accumulated_rel_l1": 0.0,
+            "prev_hidden":        None,
+            "cached_output":      None,
+        }
+
+        def cached_forward(hidden_states, *args, **kwargs):
+            if cache_state["prev_hidden"] is not None:
+                diff  = (hidden_states - cache_state["prev_hidden"]).abs().mean()
+                norm  = cache_state["prev_hidden"].abs().mean() + 1e-8
+                rel_l1 = (diff / norm).item()
+                cache_state["accumulated_rel_l1"] += rel_l1
+
+                if (
+                    cache_state["accumulated_rel_l1"] < thresh
+                    and cache_state["cached_output"] is not None
+                ):
+                    return cache_state["cached_output"]
+
+                cache_state["accumulated_rel_l1"] = 0.0
+
+            cache_state["prev_hidden"] = hidden_states.detach().clone()
+            output = original_forward(hidden_states, *args, **kwargs)
+            cache_state["cached_output"] = output
+            return output
+
+        transformer.forward = cached_forward
+        log.info(f"TeaCache enabled (LTX, thresh={thresh})")
+
+    except Exception as e:
+        log.warning(f"TeaCache apply failed: {e}")
+
+
+def _apply_ltx_compile(pipe, accel: list) -> None:
+    if "compile" not in [a.lower() for a in accel]:
+        return
+
+    offload_env = os.environ.get("GENBOX_OFFLOAD", "").lower()
+    if offload_env != "none":
+        log.warning(
+            "torch.compile übersprungen — inkompatibel mit CPU-offload. "
+            "Setze GENBOX_OFFLOAD=none um compile zu aktivieren."
+        )
+        return
+
+    try:
+        import torch
+        pipe.transformer = torch.compile(
+            pipe.transformer,
+            mode="reduce-overhead",
+            fullgraph=False,
+        )
+        log.info("torch.compile applied to LTX transformer")
+    except Exception as e:
+        log.warning(f"torch.compile failed: {e}")
 
 # ── Public generation function ─────────────────────────────────────────────────
 
@@ -338,10 +447,13 @@ def generate(
     adapter_list = build_lora_adapter_list(cfg.loras, loras_dir=loras_dir)
     apply_loras_to_pipe(pipe, adapter_list, architecture="ltx")
 
+    _apply_ltx_compile(pipe, cfg.accel)
     apply_pipeline_accelerators(
         pipe, device=device, vram_gb=vram_gb,
         accel=cfg.accel, enable_vae_tiling=enable_vae_tiling,
     )
+
+    _apply_ltx_teacache(pipe, cfg.accel)
 
     step_callback = None
     if tracker is not None:
